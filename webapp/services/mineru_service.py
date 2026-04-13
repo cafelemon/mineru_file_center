@@ -225,8 +225,6 @@ class MineruTaskRunner:
             notes=note,
         )
 
-        if bridge_result is None:
-            return
         if not self.bridge_registry_sync_service.is_enabled():
             note = _append_note(
                 note,
@@ -240,7 +238,7 @@ class MineruTaskRunner:
                 task=task,
                 collection_id=sync_result.collection_id,
                 app_code=get_bridge_app_code(task.get("knowledge_base_code")),
-                exported_pdf_path=bridge_result.exported_pdf_path,
+                exported_pdf_path=bridge_result.exported_pdf_path if bridge_result is not None else None,
             )
         except BridgeRegistrySyncError as exc:
             logger.warning("Task %s Bridge registry sync failed: %s", doc_id, exc)

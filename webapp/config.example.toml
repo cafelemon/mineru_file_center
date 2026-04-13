@@ -22,8 +22,10 @@ task_workers = 1
 
 [bridge_export]
 enabled = false
+# 仅在需要兼容旧版 Bridge 本地 PDF/manifest 导入时配置 pdf_root 和 manifest_dir
 pdf_root = "/Users/jiafei/workspace/feishu_fastgpt_bridge/data/pdf_store"
 manifest_dir = "data/bridge_exports"
+# 即使 enabled=false，只要这里配置了 Bridge 地址，FastGPT 同步成功后也会自动回填轻映射
 api_base_url = "http://127.0.0.1:8088"
 
 [fastgpt_sync]

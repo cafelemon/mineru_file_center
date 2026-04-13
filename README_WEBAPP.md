@@ -133,7 +133,11 @@ GET /api/files/pdf-link?doc_id=<doc_id>
 
 ## Bridge 最小联动
 
-默认关闭。开启后，任务成功时会额外执行两件事：
+默认关闭。当前更推荐把它当作“兼容旧 Bridge 本地 PDF 导入流程”的可选项，而不是主链路。
+
+如果你的 Bridge 和文件中心不在同一台服务器，通常可以保持 `enabled = false`，只配置 `api_base_url`，这样文件中心会在 FastGPT 同步成功后直接把轻映射回填给 Bridge，不再复制 PDF。
+
+开启后，任务成功时会额外执行两件事：
 
 1. 把原始 PDF 复制到 Bridge 目录：
 
@@ -173,7 +177,7 @@ manifest 字段对齐 Bridge 的 `PdfManifestItem`，包括：
 
 ```toml
 [bridge_export]
-enabled = true
+enabled = false
 pdf_root = "/Users/jiafei/workspace/feishu_fastgpt_bridge/data/pdf_store"
 manifest_dir = "data/bridge_exports"
 api_base_url = "http://127.0.0.1:8088"
@@ -205,4 +209,4 @@ cd /Users/jiafei/workspace/mineru_file_center
 env/bin/python export_to_bridge_manifest.py
 ```
 
-如果已开启 FastGPT 自动同步，并且 `BRIDGE_API_BASE_URL` 已配置，则文件中心会在同步成功后自动调用 Bridge 的 `/admin/kb/register-pdf` 回填 `collectionId`，不再依赖手工导入。
+如果已开启 FastGPT 自动同步，并且 `BRIDGE_API_BASE_URL` 已配置，则文件中心会在同步成功后自动调用 Bridge 的 `/admin/kb/register-pdf` 回填 `collectionId`、`doc_id` 和原文件名。这个回填现在不再依赖 Bridge 本地 PDF 文件存在。

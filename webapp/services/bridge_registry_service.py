@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -35,19 +34,17 @@ class BridgeRegistrySyncService:
         task: dict[str, Any],
         collection_id: str,
         app_code: str,
-        exported_pdf_path: Path,
+        exported_pdf_path: "Path | None" = None,
     ) -> dict[str, Any]:
         if not self.is_enabled():
             raise BridgeRegistrySyncError("Bridge 管理接口地址未配置")
-        if not exported_pdf_path.exists() or not exported_pdf_path.is_file():
-            raise BridgeRegistrySyncError("Bridge 导出的 PDF 文件不存在")
 
         payload = {
             "doc_id": str(task["doc_id"]),
             "collection_id": collection_id,
             "source_name": str(task.get("final_md_filename") or ""),
-            "origin_pdf_name": str(task.get("original_filename") or exported_pdf_path.name),
-            "pdf_abs_path": str(exported_pdf_path.resolve()),
+            "origin_pdf_name": str(task.get("original_filename") or f"{task['doc_id']}.pdf"),
+            "pdf_abs_path": str(exported_pdf_path.resolve()) if exported_pdf_path is not None else None,
             "perm_level": 1,
             "app_code": app_code,
             "status": 1,
