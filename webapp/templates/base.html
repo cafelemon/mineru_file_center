@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title or "浙江势通机器人有限公司内部知识库文件管理系统" }}</title>
+    <link rel="stylesheet" href="/static/app.css">
+    {% if has_active_tasks %}
+    <meta http-equiv="refresh" content="10">
+    {% endif %}
+</head>
+<body>
+    <header class="shell-header">
+        <div class="brand-block">
+            <div class="brand-mark">ZST</div>
+            <div>
+                <div class="eyebrow">Knowledge Asset Platform</div>
+                <h1>浙江势通机器人有限公司内部知识库文件管理系统</h1>
+                <p>面向公司内部知识资产建设，统一支撑原始文件上传、智能解析、标准化归档与可追溯管理，为后续知识入库与业务复用提供规范、可靠的文档底座。</p>
+            </div>
+        </div>
+        {% if is_authenticated %}
+        <div class="header-side">
+            <div class="user-chip">当前账号：{{ current_user }}</div>
+            <nav class="top-nav">
+                <a class="nav-link {% if nav_section == 'upload' %}is-active{% endif %}" href="/">上传</a>
+                <a class="nav-link {% if nav_section == 'tasks' %}is-active{% endif %}" href="/tasks">任务列表</a>
+                <a class="nav-link {% if nav_section == 'files' %}is-active{% endif %}" href="/files">知识库文件</a>
+                <a class="nav-link" href="/logout">退出</a>
+            </nav>
+        </div>
+        {% endif %}
+    </header>
+
+    <main class="page-shell">
+        <section class="page">
+            {% if message %}
+            <div class="banner banner-ok">{{ message }}</div>
+            {% endif %}
+            {% if error %}
+            <div class="banner banner-error">{{ error }}</div>
+            {% endif %}
+            {% block content %}{% endblock %}
+        </section>
+    </main>
+</body>
+</html>

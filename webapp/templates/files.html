@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="stats-grid">
+    {% for card in summary_cards %}
+    <article class="stat-card tone-{{ card.tone }}">
+        <span>{{ card.label }}</span>
+        <strong>{{ card.value }}</strong>
+    </article>
+    {% endfor %}
+</section>
+
+<section class="files-layout">
+    <aside class="knowledge-sidebar">
+        <section class="sidebar-section">
+            <div class="sidebar-head">
+                <span class="section-kicker">知识库目录</span>
+                <h2>文件归属</h2>
+            </div>
+
+            <nav class="knowledge-nav">
+                <a class="knowledge-item {% if not selected_knowledge_base_code %}is-active{% endif %}" href="/files{% if selected_process_status %}?process_status={{ selected_process_status }}{% endif %}">
+                    <span>全部知识库</span>
+                    <small>查看所有文件</small>
+                </a>
+                {% for knowledge_base in knowledge_bases %}
+                <a class="knowledge-item {% if knowledge_base.code == selected_knowledge_base_code %}is-active{% endif %}" href="/files?knowledge_base_code={{ knowledge_base.code }}{% if selected_process_status %}&process_status={{ selected_process_status }}{% endif %}">
+                    <span>{{ knowledge_base.display_name }}</span>
+                    <small>{{ knowledge_base.code }}</small>
+                </a>
+                {% endfor %}
+            </nav>
+        </section>
+
+        <section class="sidebar-section">
+            <form method="post" action="/knowledge-bases" class="knowledge-form">
+                <label>
+                    <span>新建知识库</span>
+                    <input type="text" name="display_name" placeholder="例如：售后服务知识库" maxlength="80" required>
+                </label>
+                <button type="submit">新建</button>
+            </form>
+        </section>
+
+        {% if selected_knowledge_base %}
+        <section class="sidebar-section">
+            <form method="post" action="/knowledge-bases/{{ selected_knowledge_base.code }}/delete" class="knowledge-form delete-form">
+                <div>
+                    <strong>删除当前知识库</strong>
+                    <p>仅空知识库可删除。请输入登录密码确认删除“{{ selected_knowledge_base.display_name }}”。</p>
+                </div>
+                <label>
+                    <span>确认密码</span>
+                    <input type="password" name="password" autocomplete="current-password" required>
+                </label>
+                <button type="submit" class="danger-button">确认删除</button>
+            </form>
+        </section>
+        {% endif %}
+    </aside>
+
+    <section class="card files-main-card">
+        <div class="section-head">
+            <div>
+                <span class="section-kicker">文件总览</span>
+                <h2>知识库文件管理</h2>
+            </div>
+            <a class="text-link" href="/">继续上传文件</a>
+        </div>
+
+        <form method="get" action="/files" class="filter-bar status-filter-bar">
+            {% if selected_knowledge_base_code %}
+            <input type="hidden" name="knowledge_base_code" value="{{ selected_knowledge_base_code }}">
+            {% endif %}
+            <label>
+                <span>处理状态</span>
+                <select name="process_status">
+                    <option value="">全部状态</option>
+                    <option value="queued" {% if selected_process_status == 'queued' %}selected{% endif %}>排队中</option>
+                    <option value="processing" {% if selected_process_status == 'processing' %}selected{% endif %}>处理中</option>
+                    <option value="success" {% if selected_process_status == 'success' %}selected{% endif %}>处理成功</option>
+                    <option value="failed" {% if selected_process_status == 'failed' %}selected{% endif %}>处理失败</option>
+                </select>
+            </label>
+            <button type="submit">筛选</button>
+        </form>
+
+        {% if files %}
+        <div class="table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>所属知识库</th>
+                        <th>原始文件名</th>
+                        <th>Markdown 文件名</th>
+                        <th>处理时间</th>
+                        <th>状态</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for file in files %}
+                    <tr>
+                        <td>
+                            <div class="table-main">{{ file.knowledge_base_name }}</div>
+                            <div class="table-sub"><code>{{ file.doc_id }}</code></div>
+                        </td>
+                        <td>
+                            <div class="table-main">{{ file.original_filename }}</div>
+                            <div class="table-sub">归档名：{{ file.stored_pdf_filename }}</div>
+                        </td>
+                        <td>
+                            <div class="table-main">{{ file.final_md_filename }}</div>
+                            <div class="table-sub">FastGPT：{{ file.fastgpt_sync_status_label }}</div>
+                        </td>
+                        <td>{{ file.processed_time }}</td>
+                        <td><span class="status status-{{ file.process_status }}">{{ file.status_label }}</span></td>
+                        <td><a class="text-link" href="/files/{{ file.doc_id }}">详情</a></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <h3>暂无符合条件的知识库文件</h3>
+            <p>可以调整筛选条件，或先到上传页新增文件。</p>
+        </div>
+        {% endif %}
+    </section>
+</section>
+{% endblock %}

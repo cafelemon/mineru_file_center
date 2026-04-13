@@ -1,0 +1,41 @@
+.DS_Store
+Thumbs.db
+
+# Python cache/runtime
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local virtual environments
+env/
+.venv/
+venv/
+
+# Runtime data and generated outputs
+data/
+cache/
+input/
+output/
+logs/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# Local configs and secrets
+.env
+.env.*
+webapp/config.toml
+
+# Large local artifacts
+*.tar.gz
+*.zip
+
+# Frontend build/deps
+trial-review-showcase/node_modules/
+trial-review-showcase/dist/
+trial-review-showcase/build/
+trial-review-showcase/.vite/

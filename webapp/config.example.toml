@@ -1,0 +1,45 @@
+[server]
+host = "0.0.0.0"
+port = 7860
+session_secret = "replace-with-a-random-secret"
+
+[auth]
+username = "admin"
+password = "replace-me"
+
+[storage]
+data_root = "data"
+max_upload_size_mb = 200
+
+[mineru]
+command = "env/bin/mineru"
+backend = "pipeline"
+method = "auto"
+lang = "ch"
+api_url = ""
+extra_args = ""
+task_workers = 1
+
+[bridge_export]
+enabled = false
+pdf_root = "/Users/jiafei/workspace/feishu_fastgpt_bridge/data/pdf_store"
+manifest_dir = "data/bridge_exports"
+api_base_url = "http://127.0.0.1:8088"
+
+[fastgpt_sync]
+enabled = false
+base_url = "http://127.0.0.1:3000"
+api_key = "replace-with-fastgpt-global-api-key"
+training_type = "chunk"
+chunk_setting_mode = "auto"
+chunk_size = 0
+
+[file_link]
+# 是否启用原始 PDF 受控访问链接能力
+enabled = true
+# 用于签名原始 PDF 访问链接；生产环境请替换为随机长串，也可用 FILE_LINK_SECRET 环境变量覆盖
+secret = ""
+# 原始 PDF 访问链接有效期，单位秒
+expire_seconds = 600
+# 生成给浏览器或后续 Bridge 使用的文件中心访问地址；迁移服务器后通常只需要改这里
+base_url = "http://127.0.0.1:7860"

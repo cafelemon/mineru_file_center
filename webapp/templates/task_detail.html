@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="card">
+    <div class="section-head">
+        <div>
+            <span class="section-kicker">任务追踪</span>
+            <h2>任务详情</h2>
+        </div>
+        <a class="text-link" href="/tasks">返回任务列表</a>
+    </div>
+    <dl class="detail-grid">
+        <div>
+            <dt>doc_id</dt>
+            <dd><code>{{ task.doc_id }}</code></dd>
+        </div>
+        <div>
+            <dt>所属知识库</dt>
+            <dd>{{ task.knowledge_base_name }}</dd>
+        </div>
+        <div>
+            <dt>处理状态</dt>
+            <dd><span class="status status-{{ task.process_status }}">{{ task.status_label }}</span></dd>
+        </div>
+        <div>
+            <dt>FastGPT 同步</dt>
+            <dd><span class="status status-fastgpt-{{ task.fastgpt_sync_status }}">{{ task.fastgpt_sync_status_label }}</span></dd>
+        </div>
+        <div>
+            <dt>原始文件名</dt>
+            <dd>{{ task.original_filename }}</dd>
+        </div>
+        <div>
+            <dt>原始 PDF 文件名</dt>
+            <dd><code>{{ task.stored_pdf_filename }}</code></dd>
+        </div>
+        <div>
+            <dt>最终 Markdown 文件名</dt>
+            <dd><code>{{ task.final_md_filename }}</code></dd>
+        </div>
+        <div>
+            <dt>上传时间</dt>
+            <dd>{{ task.upload_time }}</dd>
+        </div>
+        <div>
+            <dt>开始时间</dt>
+            <dd>{{ task.started_at or "-" }}</dd>
+        </div>
+        <div>
+            <dt>完成时间</dt>
+            <dd>{{ task.processed_time }}</dd>
+        </div>
+        <div>
+            <dt>同步完成时间</dt>
+            <dd>{{ task.fastgpt_synced_at }}</dd>
+        </div>
+        <div>
+            <dt>SHA256</dt>
+            <dd><code>{{ task.file_sha256 or "-" }}</code></dd>
+        </div>
+        <div class="span-2">
+            <dt>FastGPT 知识库</dt>
+            <dd>{{ task.fastgpt_dataset_name }}</dd>
+        </div>
+        <div class="span-2">
+            <dt>FastGPT collectionId</dt>
+            <dd><code>{{ task.fastgpt_collection_id }}</code></dd>
+        </div>
+        <div class="span-2">
+            <dt>错误信息</dt>
+            <dd>{{ task.error_message or "-" }}</dd>
+        </div>
+        <div class="span-2">
+            <dt>FastGPT 同步错误</dt>
+            <dd>{{ task.fastgpt_sync_error }}</dd>
+        </div>
+    </dl>
+</section>
+
+<section class="card">
+    <div class="section-head">
+        <div>
+            <span class="section-kicker">存储信息</span>
+            <h2>文件与日志</h2>
+        </div>
+    </div>
+    <dl class="detail-grid">
+        <div class="span-2">
+            <dt>原始 PDF 路径</dt>
+            <dd><code>{{ task.stored_pdf_path }}</code></dd>
+        </div>
+        <div class="span-2">
+            <dt>最终 Markdown 路径</dt>
+            <dd><code>{{ task.final_md_path or "-" }}</code></dd>
+        </div>
+        <div class="span-2">
+            <dt>任务目录</dt>
+            <dd><code>{{ task.mineru_task_dir }}</code></dd>
+        </div>
+        <div class="span-2">
+            <dt>任务日志</dt>
+            <dd><code>{{ task.log_path }}</code></dd>
+        </div>
+    </dl>
+    <div class="actions">
+        <a class="button-link" href="/tasks/{{ task.doc_id }}/download/pdf">下载原始 PDF</a>
+        <a class="button-link secondary" href="/tasks/{{ task.doc_id }}/download/md">下载 Markdown</a>
+        <a class="button-link tertiary" href="/tasks/{{ task.doc_id }}/download/log">下载任务日志</a>
+    </div>
+</section>
+{% endblock %}

@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="card">
+    <div class="section-head">
+        <div>
+            <span class="section-kicker">文件档案</span>
+            <h2>知识库文件详情</h2>
+        </div>
+        <a class="text-link" href="/files">返回知识库文件列表</a>
+    </div>
+    <dl class="detail-grid">
+        <div>
+            <dt>doc_id</dt>
+            <dd><code>{{ file.doc_id }}</code></dd>
+        </div>
+        <div>
+            <dt>所属知识库</dt>
+            <dd>{{ file.knowledge_base_name }}</dd>
+        </div>
+        <div>
+            <dt>处理状态</dt>
+            <dd><span class="status status-{{ file.process_status }}">{{ file.status_label }}</span></dd>
+        </div>
+        <div>
+            <dt>FastGPT 同步</dt>
+            <dd><span class="status status-fastgpt-{{ file.fastgpt_sync_status }}">{{ file.fastgpt_sync_status_label }}</span></dd>
+        </div>
+        <div>
+            <dt>原始文件名</dt>
+            <dd>{{ file.original_filename }}</dd>
+        </div>
+        <div>
+            <dt>原始 PDF 存储文件名</dt>
+            <dd><code>{{ file.stored_pdf_filename }}</code></dd>
+        </div>
+        <div>
+            <dt>最终 Markdown 文件名</dt>
+            <dd><code>{{ file.final_md_filename }}</code></dd>
+        </div>
+        <div>
+            <dt>上传时间</dt>
+            <dd>{{ file.upload_time }}</dd>
+        </div>
+        <div>
+            <dt>处理完成时间</dt>
+            <dd>{{ file.processed_time }}</dd>
+        </div>
+        <div>
+            <dt>同步完成时间</dt>
+            <dd>{{ file.fastgpt_synced_at }}</dd>
+        </div>
+        <div class="span-2">
+            <dt>FastGPT 知识库</dt>
+            <dd>{{ file.fastgpt_dataset_name }}</dd>
+        </div>
+        <div class="span-2">
+            <dt>FastGPT collectionId</dt>
+            <dd><code>{{ file.fastgpt_collection_id }}</code></dd>
+        </div>
+        <div class="span-2">
+            <dt>错误信息</dt>
+            <dd>{{ file.error_message or "-" }}</dd>
+        </div>
+        <div class="span-2">
+            <dt>FastGPT 同步错误</dt>
+            <dd>{{ file.fastgpt_sync_error }}</dd>
+        </div>
+        <div class="span-2">
+            <dt>原始 PDF 路径</dt>
+            <dd><code>{{ file.stored_pdf_path }}</code></dd>
+        </div>
+        <div class="span-2">
+            <dt>Markdown 路径</dt>
+            <dd><code>{{ file.final_md_path or "-" }}</code></dd>
+        </div>
+    </dl>
+    <div class="actions">
+        <a class="button-link" href="/files/{{ file.doc_id }}/download/pdf">下载原始 PDF</a>
+        <a class="button-link secondary" href="/files/{{ file.doc_id }}/download/md">下载 Markdown 文件</a>
+        {% if file.can_retry_fastgpt_sync %}
+        <form method="post" action="/files/{{ file.doc_id }}/retry-fastgpt-sync" class="inline-form">
+            <button type="submit" class="button-link tertiary form-button-link">重试 FastGPT 同步</button>
+        </form>
+        {% endif %}
+    </div>
+</section>
+
+<section class="card">
+    <div class="section-head">
+        <div>
+            <span class="section-kicker">Controlled Access</span>
+            <h2>原始文件受控访问链接</h2>
+        </div>
+    </div>
+    {% if pdf_link %}
+    <div class="controlled-link-panel">
+        <label>
+            <span>访问链接</span>
+            <input class="link-field" type="text" value="{{ pdf_link.pdf_url }}" readonly>
+        </label>
+        <div class="link-meta">
+            <span>链接有效期：{{ pdf_link.expires_in }} 秒</span>
+            <span>仅允许访问当前 doc_id 对应的原始 PDF</span>
+        </div>
+        <div class="actions compact">
+            <a class="button-link" href="{{ pdf_link.pdf_url }}" target="_blank" rel="noopener">打开原始 PDF</a>
+            <a class="button-link tertiary" href="/api/files/pdf-link?doc_id={{ file.doc_id }}" target="_blank" rel="noopener">查看链接信息</a>
+        </div>
+    </div>
+    {% else %}
+    <div class="empty-state compact-state">
+        <h3>暂未生成访问链接</h3>
+        <p>{{ file_link_error }}</p>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

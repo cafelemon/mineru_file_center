@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="card narrow login-card">
+    <span class="section-kicker">系统登录</span>
+    <h2>进入内部知识库文件管理系统</h2>
+    <p class="hint">请使用已分配的系统账号登录，进入公司内部知识文件上传、解析、归档与下载管理界面。</p>
+    <form method="post" action="/login" class="stack">
+        <label>
+            <span>用户名</span>
+            <input type="text" name="username" required autocomplete="username">
+        </label>
+        <label>
+            <span>密码</span>
+            <input type="password" name="password" required autocomplete="current-password">
+        </label>
+        <button type="submit">登录系统</button>
+    </form>
+</section>
+{% endblock %}
