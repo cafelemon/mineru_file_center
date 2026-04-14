@@ -12,6 +12,9 @@ TASK_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS tasks (
     doc_id TEXT PRIMARY KEY,
     knowledge_base_code TEXT,
+    folder_path TEXT,
+    relative_source_path TEXT,
+    source_archive_name TEXT,
     original_filename TEXT NOT NULL,
     stored_pdf_path TEXT NOT NULL,
     stored_pdf_filename TEXT,
@@ -35,6 +38,9 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 OPTIONAL_TASK_COLUMNS: dict[str, str] = {
     "knowledge_base_code": "TEXT",
+    "folder_path": "TEXT",
+    "relative_source_path": "TEXT",
+    "source_archive_name": "TEXT",
     "stored_pdf_filename": "TEXT",
     "final_md_filename": "TEXT",
     "processed_time": "TEXT",
@@ -84,6 +90,27 @@ def _migrate_tasks_schema(connection: sqlite3.Connection) -> None:
         UPDATE tasks
         SET knowledge_base_code = 'general'
         WHERE knowledge_base_code IS NULL OR knowledge_base_code = ''
+        """
+    )
+    connection.execute(
+        """
+        UPDATE tasks
+        SET folder_path = ''
+        WHERE folder_path IS NULL
+        """
+    )
+    connection.execute(
+        """
+        UPDATE tasks
+        SET relative_source_path = original_filename
+        WHERE relative_source_path IS NULL OR relative_source_path = ''
+        """
+    )
+    connection.execute(
+        """
+        UPDATE tasks
+        SET source_archive_name = ''
+        WHERE source_archive_name IS NULL
         """
     )
     connection.execute(
@@ -194,6 +221,7 @@ def list_library_files(
     settings: Settings,
     *,
     knowledge_base_code: str | None = None,
+    folder_path: str | None = None,
     process_status: str | None = None,
     limit: int = 500,
 ) -> list[dict[str, Any]]:
@@ -203,6 +231,10 @@ def list_library_files(
     if knowledge_base_code:
         conditions.append("knowledge_base_code = ?")
         params.append(knowledge_base_code)
+    normalized_folder_path = (folder_path or "").strip().strip("/")
+    if normalized_folder_path:
+        conditions.append("(folder_path = ? OR folder_path LIKE ?)")
+        params.extend([normalized_folder_path, f"{normalized_folder_path}/%"])
     if process_status:
         conditions.append("process_status = ?")
         params.append(process_status)

@@ -1,5 +1,21 @@
 {% extends "base.html" %}
 
+{% macro render_folder_nodes(nodes) %}
+    {% if nodes %}
+    <ul class="folder-tree">
+        {% for node in nodes %}
+        <li>
+            <a class="folder-item {% if node.is_active %}is-active{% endif %}" href="{{ node.href }}">
+                <span>{{ node.name }}</span>
+                <small>{{ node.count }}</small>
+            </a>
+            {{ render_folder_nodes(node.children) }}
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+{% endmacro %}
+
 {% block content %}
 <section class="stats-grid">
     {% for card in summary_cards %}
@@ -31,6 +47,22 @@
                 {% endfor %}
             </nav>
         </section>
+
+        {% if selected_knowledge_base %}
+        <section class="sidebar-section">
+            <div class="sidebar-head">
+                <span class="section-kicker">子目录</span>
+                <h2>目录树</h2>
+            </div>
+            <nav class="folder-nav">
+                <a class="folder-item {% if not selected_folder_path %}is-active{% endif %}" href="/files?knowledge_base_code={{ selected_knowledge_base.code }}{% if selected_process_status %}&process_status={{ selected_process_status }}{% endif %}">
+                    <span>知识库根目录</span>
+                    <small>全部文件</small>
+                </a>
+                {{ render_folder_nodes(folder_tree) }}
+            </nav>
+        </section>
+        {% endif %}
 
         <section class="sidebar-section">
             <form method="post" action="/knowledge-bases" class="knowledge-form">
@@ -72,6 +104,9 @@
             {% if selected_knowledge_base_code %}
             <input type="hidden" name="knowledge_base_code" value="{{ selected_knowledge_base_code }}">
             {% endif %}
+            {% if selected_folder_path %}
+            <input type="hidden" name="folder_path" value="{{ selected_folder_path }}">
+            {% endif %}
             <label>
                 <span>处理状态</span>
                 <select name="process_status">
@@ -91,6 +126,7 @@
                 <thead>
                     <tr>
                         <th>所属知识库</th>
+                        <th>子目录</th>
                         <th>原始文件名</th>
                         <th>Markdown 文件名</th>
                         <th>处理时间</th>
@@ -106,8 +142,12 @@
                             <div class="table-sub"><code>{{ file.doc_id }}</code></div>
                         </td>
                         <td>
+                            <div class="table-main">{{ file.folder_path_display }}</div>
+                            <div class="table-sub">{{ file.source_archive_name }}</div>
+                        </td>
+                        <td>
                             <div class="table-main">{{ file.original_filename }}</div>
-                            <div class="table-sub">归档名：{{ file.stored_pdf_filename }}</div>
+                            <div class="table-sub">{{ file.relative_source_path }}</div>
                         </td>
                         <td>
                             <div class="table-main">{{ file.final_md_filename }}</div>

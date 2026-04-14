@@ -472,6 +472,12 @@ button:hover,
     gap: 10px;
 }
 
+.folder-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
 .knowledge-item {
     display: block;
     padding: 12px 14px;
@@ -497,6 +503,51 @@ button:hover,
     margin-top: 5px;
     color: var(--text-muted);
     word-break: break-all;
+}
+
+.folder-tree {
+    list-style: none;
+    margin: 6px 0 0;
+    padding: 0 0 0 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-left: 1px solid var(--line-soft);
+}
+
+.folder-tree li {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.folder-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line-soft);
+    background: #fff;
+    text-decoration: none;
+}
+
+.folder-item:hover,
+.folder-item.is-active {
+    border-color: #85a9c8;
+    background: #f2f7fb;
+}
+
+.folder-item span {
+    font-weight: 700;
+    min-width: 0;
+    word-break: break-word;
+}
+
+.folder-item small {
+    color: var(--text-muted);
+    flex-shrink: 0;
 }
 
 .knowledge-form {

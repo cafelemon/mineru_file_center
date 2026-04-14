@@ -31,6 +31,18 @@
             <dd>{{ file.original_filename }}</dd>
         </div>
         <div>
+            <dt>所属子目录</dt>
+            <dd>{{ file.folder_path_display }}</dd>
+        </div>
+        <div class="span-2">
+            <dt>原始相对路径</dt>
+            <dd><code>{{ file.relative_source_path }}</code></dd>
+        </div>
+        <div>
+            <dt>来源压缩包</dt>
+            <dd>{{ file.source_archive_name }}</dd>
+        </div>
+        <div>
             <dt>原始 PDF 存储文件名</dt>
             <dd><code>{{ file.stored_pdf_filename }}</code></dd>
         </div>

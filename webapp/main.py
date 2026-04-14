@@ -6,9 +6,11 @@ import hmac
 import logging
 import os
 import secrets
+import shutil
 import time
+import zipfile
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -188,6 +190,12 @@ def enrich_record(record: dict | None) -> dict | None:
     knowledge_base = get_knowledge_base(settings, item.get("knowledge_base_code"))
     item["knowledge_base_code"] = knowledge_base.code
     item["knowledge_base_name"] = knowledge_base.display_name
+    item["folder_path"] = normalize_folder_path(item.get("folder_path"))
+    item["folder_path_display"] = item["folder_path"] or "知识库根目录"
+    item["relative_source_path"] = normalize_relative_source_path(
+        item.get("relative_source_path") or item.get("original_filename") or ""
+    )
+    item["source_archive_name"] = item.get("source_archive_name") or "-"
     item["stored_pdf_filename"] = item.get("stored_pdf_filename") or Path(
         item["stored_pdf_path"]
     ).name
@@ -234,6 +242,85 @@ def build_summary_cards(records: list[dict]) -> list[dict[str, object]]:
         {"label": "处理中", "value": processing_count, "tone": "processing"},
         {"label": "异常文件", "value": failed_count, "tone": "failed"},
     ]
+
+
+def normalize_folder_path(raw_value: object) -> str:
+    text = str(raw_value or "").strip().replace("\\", "/")
+    if not text:
+        return ""
+    normalized = "/".join(part for part in text.split("/") if part and part != ".")
+    return normalized.strip("/")
+
+
+def normalize_relative_source_path(raw_value: object) -> str:
+    text = str(raw_value or "").strip().replace("\\", "/")
+    return "/".join(part for part in text.split("/") if part and part != ".")
+
+
+def folder_path_from_relative(relative_source_path: str) -> str:
+    relative_path = normalize_relative_source_path(relative_source_path)
+    if not relative_path:
+        return ""
+    parent = str(PurePosixPath(relative_path).parent)
+    return "" if parent in {"", "."} else normalize_folder_path(parent)
+
+
+def build_folder_tree(
+    records: list[dict],
+    *,
+    knowledge_base_code: str,
+    selected_folder_path: str,
+    selected_process_status: str,
+) -> list[dict[str, object]]:
+    nodes: dict[str, dict[str, object]] = {}
+
+    for record in records:
+        folder_path = normalize_folder_path(record.get("folder_path"))
+        if not folder_path:
+            continue
+        parent_lookup = nodes
+        current_path = ""
+        for part in folder_path.split("/"):
+            current_path = part if not current_path else f"{current_path}/{part}"
+            node = parent_lookup.setdefault(
+                current_path,
+                {
+                    "name": part,
+                    "path": current_path,
+                    "count": 0,
+                    "children": {},
+                },
+            )
+            node["count"] = int(node["count"]) + 1
+            parent_lookup = node["children"]  # type: ignore[assignment]
+
+    def finalize(children: dict[str, dict[str, object]]) -> list[dict[str, object]]:
+        items = sorted(
+            children.values(),
+            key=lambda item: (
+                normalize_folder_path(item["path"]).count("/"),
+                str(item["name"]).lower(),
+            ),
+        )
+        finalized: list[dict[str, object]] = []
+        for item in items:
+            folder_path = str(item["path"])
+            params = {"knowledge_base_code": knowledge_base_code, "folder_path": folder_path}
+            if selected_process_status:
+                params["process_status"] = selected_process_status
+            finalized.append(
+                {
+                    "name": item["name"],
+                    "path": folder_path,
+                    "count": item["count"],
+                    "is_active": folder_path == selected_folder_path,
+                    "href": f"/files?{urlencode(params)}",
+                    "children": finalize(item["children"]),  # type: ignore[arg-type]
+                }
+            )
+        return finalized
+
+    return finalize(nodes)
 
 
 @app.get("/healthz")
@@ -323,85 +410,53 @@ async def upload_files(
             status_code=303,
         )
     knowledge_base = get_knowledge_base(settings, selected_knowledge_base_code)
+    runner: MineruTaskRunner = app.state.task_runner
 
     for upload in files:
         original_name = Path(upload.filename or "").name
         if not original_name:
             errors.append("存在未命名文件，已跳过。")
             continue
-        if Path(original_name).suffix.lower() != ".pdf":
-            errors.append(f"{original_name}: 仅支持 PDF。")
-            continue
-
-        doc_id = generate_doc_id()
-        task_dir = settings.tasks_dir / doc_id
-        raw_output_dir = task_dir / "raw_output"
-        temp_upload_path = settings.uploads_dir / f"{doc_id}.uploading"
-        stored_pdf_path = settings.pdf_store_dir / f"{doc_id}.pdf"
-        final_md_path = settings.output_dir / f"{doc_id}.md"
-        log_path = task_dir / "task.log"
-
-        task_dir.mkdir(parents=True, exist_ok=True)
-        raw_output_dir.mkdir(parents=True, exist_ok=True)
-
+        suffix = Path(original_name).suffix.lower()
         try:
-            file_sha256, file_size = await save_pdf_upload(
-                upload,
-                temp_upload_path,
-                stored_pdf_path,
-                settings.max_upload_size_bytes,
-            )
-            db.insert_task(
-                settings,
-                {
-                    "doc_id": doc_id,
-                    "knowledge_base_code": knowledge_base.code,
-                    "original_filename": original_name,
-                    "stored_pdf_path": str(stored_pdf_path),
-                    "stored_pdf_filename": stored_pdf_path.name,
-                    "final_md_path": str(final_md_path),
-                    "final_md_filename": final_md_path.name,
-                    "upload_time": utc_now(),
-                    "started_at": None,
-                    "completed_at": None,
-                    "processed_time": None,
-                    "process_status": "queued",
-                    "error_message": "",
-                    "mineru_task_dir": str(task_dir),
-                    "log_path": str(log_path),
-                    "file_sha256": file_sha256,
-                    "notes": "",
-                    "file_size_bytes": file_size,
-                    "mineru_backend": settings.mineru_backend,
-                    "mineru_method": settings.mineru_method,
-                    "fastgpt_sync_status": "pending",
-                    "fastgpt_sync_error": "",
-                },
-            )
-            runner: MineruTaskRunner = app.state.task_runner
-            runner.submit(doc_id)
-            queued_doc_ids.append(doc_id)
-            logger.info(
-                "Accepted upload %s as doc_id=%s, knowledge_base=%s",
-                original_name,
-                doc_id,
-                knowledge_base.code,
-            )
+            if suffix == ".pdf":
+                doc_id = await archive_uploaded_pdf(
+                    upload=upload,
+                    knowledge_base_code=knowledge_base.code,
+                    original_name=original_name,
+                    relative_source_path=original_name,
+                    source_archive_name="",
+                    runner=runner,
+                )
+                queued_doc_ids.append(doc_id)
+                continue
+            if suffix == ".zip":
+                zip_doc_ids, zip_errors = await archive_uploaded_zip(
+                    upload=upload,
+                    knowledge_base_code=knowledge_base.code,
+                    archive_name=original_name,
+                    runner=runner,
+                )
+                queued_doc_ids.extend(zip_doc_ids)
+                errors.extend(zip_errors)
+                continue
+            errors.append(f"{original_name}: 仅支持 PDF 或 ZIP。")
         except Exception as exc:
             logger.exception("Upload failed for %s", original_name)
-            cleanup_paths(temp_upload_path, stored_pdf_path)
             errors.append(f"{original_name}: {exc}")
 
     if queued_doc_ids:
+        preview_doc_ids = ", ".join(queued_doc_ids[:5])
         message = (
-            f"文件已归档到{knowledge_base.display_name}，并加入处理队列: "
-            f"{', '.join(queued_doc_ids)}"
+            f"文件已归档到{knowledge_base.display_name}，共加入 {len(queued_doc_ids)} 个处理任务"
         )
+        if preview_doc_ids:
+            message = f"{message}（示例：{preview_doc_ids}）"
         if errors:
             message = f"{message}；部分文件失败，请看页面提示。"
         error_text = " | ".join(errors)
         return RedirectResponse(
-            url=f"/files?{urlencode({'message': message, 'error': error_text})}",
+            url=f"/files?{urlencode({'knowledge_base_code': knowledge_base.code, 'message': message, 'error': error_text})}",
             status_code=303,
         )
 
@@ -454,6 +509,7 @@ def task_detail(
 def file_list(
     request: Request,
     knowledge_base_code: str = "",
+    folder_path: str = "",
     process_status: str = "",
     _: None = Depends(require_login),
 ) -> HTMLResponse:
@@ -463,11 +519,30 @@ def file_list(
         selected_knowledge_base_code,
     ):
         selected_knowledge_base_code = ""
+    selected_folder_path = normalize_folder_path(folder_path if selected_knowledge_base_code else "")
     selected_status = process_status.strip()
+    folder_records = (
+        enrich_records(
+            db.list_library_files(
+                settings,
+                knowledge_base_code=selected_knowledge_base_code or None,
+                limit=5000,
+            )
+        )
+        if selected_knowledge_base_code
+        else []
+    )
+    available_folder_paths = {
+        normalize_folder_path(item.get("folder_path")) for item in folder_records if item is not None
+    }
+    if selected_folder_path and selected_folder_path not in available_folder_paths:
+        selected_folder_path = ""
+
     files = enrich_records(
         db.list_library_files(
             settings,
             knowledge_base_code=selected_knowledge_base_code or None,
+            folder_path=selected_folder_path or None,
             process_status=selected_status or None,
         )
     )
@@ -483,6 +558,16 @@ def file_list(
         ),
         None,
     )
+    folder_tree = (
+        build_folder_tree(
+            folder_records,
+            knowledge_base_code=selected_knowledge_base_code,
+            selected_folder_path=selected_folder_path,
+            selected_process_status=selected_status,
+        )
+        if selected_knowledge_base_code
+        else []
+    )
     return render(
         request,
         "files.html",
@@ -494,7 +579,10 @@ def file_list(
             "has_active_tasks": has_active_tasks,
             "selected_knowledge_base_code": selected_knowledge_base_code,
             "selected_knowledge_base": selected_knowledge_base,
+            "selected_folder_path": selected_folder_path,
+            "selected_folder_path_display": selected_folder_path or "知识库根目录",
             "selected_process_status": selected_status,
+            "folder_tree": folder_tree,
         },
     )
 
@@ -776,8 +864,269 @@ def download_log(
     return FileResponse(log_path, media_type="text/plain", filename=log_path.name)
 
 
-async def save_pdf_upload(
+def build_task_paths(doc_id: str) -> dict[str, Path]:
+    task_dir = settings.tasks_dir / doc_id
+    return {
+        "task_dir": task_dir,
+        "raw_output_dir": task_dir / "raw_output",
+        "temp_upload_path": settings.uploads_dir / f"{doc_id}.uploading",
+        "stored_pdf_path": settings.pdf_store_dir / f"{doc_id}.pdf",
+        "final_md_path": settings.output_dir / f"{doc_id}.md",
+        "log_path": task_dir / "task.log",
+    }
+
+
+def insert_queued_task(
+    *,
+    doc_id: str,
+    knowledge_base_code: str,
+    original_name: str,
+    relative_source_path: str,
+    source_archive_name: str,
+    stored_pdf_path: Path,
+    final_md_path: Path,
+    log_path: Path,
+    task_dir: Path,
+    file_sha256: str,
+    file_size: int,
+) -> None:
+    db.insert_task(
+        settings,
+        {
+            "doc_id": doc_id,
+            "knowledge_base_code": knowledge_base_code,
+            "folder_path": folder_path_from_relative(relative_source_path),
+            "relative_source_path": normalize_relative_source_path(relative_source_path) or original_name,
+            "source_archive_name": source_archive_name,
+            "original_filename": original_name,
+            "stored_pdf_path": str(stored_pdf_path),
+            "stored_pdf_filename": stored_pdf_path.name,
+            "final_md_path": str(final_md_path),
+            "final_md_filename": final_md_path.name,
+            "upload_time": utc_now(),
+            "started_at": None,
+            "completed_at": None,
+            "processed_time": None,
+            "process_status": "queued",
+            "error_message": "",
+            "mineru_task_dir": str(task_dir),
+            "log_path": str(log_path),
+            "file_sha256": file_sha256,
+            "notes": "",
+            "file_size_bytes": file_size,
+            "mineru_backend": settings.mineru_backend,
+            "mineru_method": settings.mineru_method,
+            "fastgpt_sync_status": "pending",
+            "fastgpt_sync_error": "",
+        },
+    )
+
+
+async def archive_uploaded_pdf(
+    *,
     upload: UploadFile,
+    knowledge_base_code: str,
+    original_name: str,
+    relative_source_path: str,
+    source_archive_name: str,
+    runner: MineruTaskRunner,
+) -> str:
+    doc_id = generate_doc_id()
+    task_paths = build_task_paths(doc_id)
+    task_paths["task_dir"].mkdir(parents=True, exist_ok=True)
+    task_paths["raw_output_dir"].mkdir(parents=True, exist_ok=True)
+
+    try:
+        file_sha256, file_size = await save_pdf_upload(
+            upload,
+            task_paths["temp_upload_path"],
+            task_paths["stored_pdf_path"],
+            settings.max_upload_size_bytes,
+        )
+        insert_queued_task(
+            doc_id=doc_id,
+            knowledge_base_code=knowledge_base_code,
+            original_name=original_name,
+            relative_source_path=relative_source_path,
+            source_archive_name=source_archive_name,
+            stored_pdf_path=task_paths["stored_pdf_path"],
+            final_md_path=task_paths["final_md_path"],
+            log_path=task_paths["log_path"],
+            task_dir=task_paths["task_dir"],
+            file_sha256=file_sha256,
+            file_size=file_size,
+        )
+    except Exception:
+        cleanup_paths(
+            task_paths["temp_upload_path"],
+            task_paths["stored_pdf_path"],
+            task_paths["task_dir"],
+        )
+        raise
+
+    runner.submit(doc_id)
+    logger.info(
+        "Accepted upload %s as doc_id=%s, knowledge_base=%s, folder=%s",
+        relative_source_path,
+        doc_id,
+        knowledge_base_code,
+        folder_path_from_relative(relative_source_path) or "/",
+    )
+    return doc_id
+
+
+async def archive_uploaded_zip(
+    *,
+    upload: UploadFile,
+    knowledge_base_code: str,
+    archive_name: str,
+    runner: MineruTaskRunner,
+) -> tuple[list[str], list[str]]:
+    work_dir = settings.uploads_dir / "_zip_imports" / generate_doc_id()
+    archive_path = work_dir / archive_name
+    queued_doc_ids: list[str] = []
+    errors: list[str] = []
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        await save_uploaded_file(upload, archive_path)
+        try:
+            with zipfile.ZipFile(archive_path) as archive:
+                pdf_found = False
+                for member in archive.infolist():
+                    normalized_path = normalize_archive_member_path(member.filename)
+                    if normalized_path is None:
+                        if should_skip_archive_member(member.filename):
+                            continue
+                        errors.append(f"{archive_name}: 包含非法路径，已跳过 {member.filename}")
+                        continue
+                    if member.is_dir():
+                        continue
+                    if Path(normalized_path).suffix.lower() != ".pdf":
+                        continue
+                    pdf_found = True
+                    original_name = Path(normalized_path).name
+                    try:
+                        with archive.open(member) as source_handle:
+                            doc_id = archive_pdf_stream(
+                                source_handle=source_handle,
+                                knowledge_base_code=knowledge_base_code,
+                                original_name=original_name,
+                                relative_source_path=normalized_path,
+                                source_archive_name=archive_name,
+                                runner=runner,
+                            )
+                    except Exception as exc:
+                        logger.exception(
+                            "ZIP import failed for %s entry %s",
+                            archive_name,
+                            normalized_path,
+                        )
+                        errors.append(f"{archive_name}/{normalized_path}: {exc}")
+                        continue
+                    queued_doc_ids.append(doc_id)
+                if not pdf_found:
+                    errors.append(f"{archive_name}: ZIP 内没有可处理的 PDF 文件。")
+        except zipfile.BadZipFile as exc:
+            raise ValueError("ZIP 文件无效或已损坏。") from exc
+    finally:
+        await upload.close()
+        cleanup_paths(work_dir)
+
+    return queued_doc_ids, errors
+
+
+async def save_uploaded_file(upload: UploadFile, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        await upload.seek(0)
+        with destination.open("wb") as output_handle:
+            shutil.copyfileobj(upload.file, output_handle)
+    finally:
+        try:
+            await upload.seek(0)
+        except Exception:
+            return
+
+
+def archive_pdf_stream(
+    *,
+    source_handle,
+    knowledge_base_code: str,
+    original_name: str,
+    relative_source_path: str,
+    source_archive_name: str,
+    runner: MineruTaskRunner,
+) -> str:
+    doc_id = generate_doc_id()
+    task_paths = build_task_paths(doc_id)
+    task_paths["task_dir"].mkdir(parents=True, exist_ok=True)
+    task_paths["raw_output_dir"].mkdir(parents=True, exist_ok=True)
+
+    try:
+        file_sha256, file_size = store_pdf_stream(
+            source_handle,
+            task_paths["temp_upload_path"],
+            task_paths["stored_pdf_path"],
+            settings.max_upload_size_bytes,
+        )
+        insert_queued_task(
+            doc_id=doc_id,
+            knowledge_base_code=knowledge_base_code,
+            original_name=original_name,
+            relative_source_path=relative_source_path,
+            source_archive_name=source_archive_name,
+            stored_pdf_path=task_paths["stored_pdf_path"],
+            final_md_path=task_paths["final_md_path"],
+            log_path=task_paths["log_path"],
+            task_dir=task_paths["task_dir"],
+            file_sha256=file_sha256,
+            file_size=file_size,
+        )
+    except Exception:
+        cleanup_paths(
+            task_paths["temp_upload_path"],
+            task_paths["stored_pdf_path"],
+            task_paths["task_dir"],
+        )
+        raise
+
+    runner.submit(doc_id)
+    logger.info(
+        "Accepted archive member %s as doc_id=%s, knowledge_base=%s, archive=%s",
+        relative_source_path,
+        doc_id,
+        knowledge_base_code,
+        source_archive_name,
+    )
+    return doc_id
+
+
+def normalize_archive_member_path(member_name: str) -> str | None:
+    raw_name = (member_name or "").strip().replace("\\", "/")
+    if not raw_name or raw_name.endswith("/"):
+        return None
+    if raw_name.startswith("/"):
+        return None
+    path = PurePosixPath(raw_name)
+    if any(part in {"", ".", ".."} for part in path.parts):
+        return None
+    if any(part == "__MACOSX" for part in path.parts):
+        return None
+    if path.parts and path.parts[0].endswith(":"):
+        return None
+    return normalize_relative_source_path(str(path))
+
+
+def should_skip_archive_member(member_name: str) -> bool:
+    raw_name = (member_name or "").strip().replace("\\", "/")
+    if not raw_name:
+        return True
+    return "__MACOSX/" in raw_name or raw_name.endswith("/")
+
+
+def store_pdf_stream(
+    source_handle,
     temp_path: Path,
     stored_pdf_path: Path,
     max_size_bytes: int,
@@ -792,7 +1141,7 @@ async def save_pdf_upload(
     try:
         with temp_path.open("wb") as output_handle:
             while True:
-                chunk = await upload.read(1024 * 1024)
+                chunk = source_handle.read(1024 * 1024)
                 if not chunk:
                     break
                 if first_chunk:
@@ -811,15 +1160,36 @@ async def save_pdf_upload(
         os.replace(temp_path, stored_pdf_path)
         return sha256.hexdigest(), file_size
     finally:
-        await upload.close()
         if temp_path.exists():
             temp_path.unlink(missing_ok=True)
 
 
+async def save_pdf_upload(
+    upload: UploadFile,
+    temp_path: Path,
+    stored_pdf_path: Path,
+    max_size_bytes: int,
+) -> tuple[str, int]:
+    try:
+        await upload.seek(0)
+        return store_pdf_stream(
+            upload.file,
+            temp_path,
+            stored_pdf_path,
+            max_size_bytes,
+        )
+    finally:
+        await upload.close()
+
+
 def cleanup_paths(*paths: Path) -> None:
     for path in paths:
-        if path.exists():
-            path.unlink(missing_ok=True)
+        if not path.exists():
+            continue
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+            continue
+        path.unlink(missing_ok=True)
 
 
 def generate_doc_id() -> str:
