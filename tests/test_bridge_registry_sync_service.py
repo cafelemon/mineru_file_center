@@ -75,3 +75,30 @@ class BridgeRegistrySyncServiceTests(unittest.TestCase):
             },
         )
 
+    def test_delete_mapping_posts_doc_id_and_collection_id(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        if tmp_path.exists():
+            import shutil
+
+            shutil.rmtree(tmp_path)
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp_path, ignore_errors=True))
+
+        captured: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["path"] = request.url.path
+            captured["json"] = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(200, json={"deleted": True})
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        service = BridgeRegistrySyncService(build_settings(tmp_path), client=client)
+
+        result = service.delete_mapping(doc_id="doc-1", collection_id="collection-1")
+
+        self.assertEqual(result, {"deleted": True})
+        self.assertEqual(captured["path"], "/admin/kb/delete-pdf")
+        self.assertEqual(
+            captured["json"],
+            {"doc_id": "doc-1", "collection_id": "collection-1"},
+        )

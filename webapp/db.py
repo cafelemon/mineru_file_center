@@ -194,6 +194,12 @@ def update_task(settings: Settings, doc_id: str, **fields: Any) -> None:
         connection.commit()
 
 
+def delete_task(settings: Settings, doc_id: str) -> None:
+    with closing(_connect(settings)) as connection:
+        connection.execute("DELETE FROM tasks WHERE doc_id = ?", (doc_id,))
+        connection.commit()
+
+
 def get_task(settings: Settings, doc_id: str) -> dict[str, Any] | None:
     with closing(_connect(settings)) as connection:
         row = connection.execute(

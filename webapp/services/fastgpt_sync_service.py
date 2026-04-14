@@ -124,6 +124,12 @@ class FastGPTSyncService:
             raise FastGPTSyncError(f"FastGPT 中存在多个名称为“{dataset_name}”的知识库")
         return matches[0]
 
+    def delete_collection(self, collection_id: str) -> None:
+        normalized_collection_id = str(collection_id or "").strip()
+        if not normalized_collection_id:
+            return
+        self._delete_collection(normalized_collection_id)
+
     def _delete_collection(self, collection_id: str) -> None:
         self._post_json(
             "/api/core/dataset/collection/delete",

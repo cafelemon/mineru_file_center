@@ -34,6 +34,8 @@ from .knowledge_bases import (
 )
 from .services.mineru_service import MineruTaskRunner
 from .services.fastgpt_sync_service import FastGPTSyncError
+from .services.bridge_registry_service import BridgeRegistrySyncError, BridgeRegistrySyncService
+from .services.fastgpt_sync_service import FastGPTSyncService
 from .services.file_link_service import (
     FileLinkDisabledError,
     FileLinkSecretMissingError,
@@ -222,6 +224,7 @@ def enrich_record(record: dict | None) -> dict | None:
     item["can_retry_fastgpt_sync"] = (
         item.get("process_status") == "success" and item["fastgpt_sync_status"] == "failed"
     )
+    item["can_delete_document"] = item.get("process_status") in {"success", "failed"}
     return item
 
 
@@ -242,6 +245,54 @@ def build_summary_cards(records: list[dict]) -> list[dict[str, object]]:
         {"label": "处理中", "value": processing_count, "tone": "processing"},
         {"label": "异常文件", "value": failed_count, "tone": "failed"},
     ]
+
+
+class DocumentDeleteError(RuntimeError):
+    pass
+
+
+def delete_document_record(
+    task: dict,
+    *,
+    fastgpt_service: FastGPTSyncService,
+    bridge_service: BridgeRegistrySyncService,
+) -> None:
+    doc_id = str(task["doc_id"])
+    collection_id = str(task.get("fastgpt_collection_id") or "").strip()
+
+    if collection_id:
+        try:
+            fastgpt_service.delete_collection(collection_id)
+        except FastGPTSyncError as exc:
+            if not _is_missing_remote_error(str(exc)):
+                raise DocumentDeleteError(f"FastGPT 删除失败：{exc}") from exc
+
+    if bridge_service.is_enabled():
+        try:
+            bridge_service.delete_mapping(doc_id=doc_id, collection_id=collection_id or None)
+        except BridgeRegistrySyncError as exc:
+            raise DocumentDeleteError(f"Bridge 映射删除失败：{exc}") from exc
+
+    try:
+        delete_task_artifacts(task)
+    except OSError as exc:
+        raise DocumentDeleteError(f"本地文件删除失败：{exc}") from exc
+
+    db.delete_task(settings, doc_id)
+
+
+def _is_missing_remote_error(message: str) -> bool:
+    text = str(message or "").strip().lower()
+    if not text:
+        return False
+    missing_markers = (
+        "not found",
+        "不存在",
+        "未找到",
+        "404",
+        "no valid registry",
+    )
+    return any(marker in text for marker in missing_markers)
 
 
 def normalize_folder_path(raw_value: object) -> str:
@@ -684,6 +735,65 @@ def retry_fastgpt_sync(
 
     return RedirectResponse(
         url=f"/files/{doc_id}?{urlencode({'message': 'FastGPT 同步已重试'})}",
+        status_code=303,
+    )
+
+
+@app.post("/files/{doc_id}/delete")
+def delete_document(
+    doc_id: str,
+    request: Request,
+    password: str = Form(...),
+    _: None = Depends(require_login),
+):
+    del request
+    task = db.get_task(settings, doc_id)
+    if task is None:
+        return RedirectResponse(
+            url=f"/files?{urlencode({'error': '文档不存在或已删除'})}",
+            status_code=303,
+        )
+
+    redirect_params = {
+        "knowledge_base_code": str(task.get("knowledge_base_code") or "").strip(),
+    }
+    folder_path = normalize_folder_path(task.get("folder_path"))
+    if folder_path:
+        redirect_params["folder_path"] = folder_path
+
+    if not secrets.compare_digest(password, settings.password):
+        return RedirectResponse(
+            url=f"/files/{doc_id}?{urlencode({'error': '删除密码不正确'})}",
+            status_code=303,
+        )
+
+    process_status = str(task.get("process_status") or "").strip()
+    if process_status not in {"success", "failed"}:
+        return RedirectResponse(
+            url=f"/files/{doc_id}?{urlencode({'error': '当前版本不支持删除排队中或处理中的文档'})}",
+            status_code=303,
+        )
+
+    fastgpt_service = FastGPTSyncService(settings)
+    bridge_service = BridgeRegistrySyncService(settings)
+    try:
+        delete_document_record(
+            task,
+            fastgpt_service=fastgpt_service,
+            bridge_service=bridge_service,
+        )
+    except DocumentDeleteError as exc:
+        return RedirectResponse(
+            url=f"/files/{doc_id}?{urlencode({'error': str(exc)})}",
+            status_code=303,
+        )
+    finally:
+        fastgpt_service.close()
+        bridge_service.close()
+
+    redirect_params["message"] = f"已删除文档：{task.get('original_filename') or doc_id}"
+    return RedirectResponse(
+        url=f"/files?{urlencode(redirect_params)}",
         status_code=303,
     )
 
@@ -1190,6 +1300,42 @@ def cleanup_paths(*paths: Path) -> None:
             shutil.rmtree(path, ignore_errors=True)
             continue
         path.unlink(missing_ok=True)
+
+
+def delete_task_artifacts(task: dict) -> None:
+    for path in iter_task_artifact_paths(task):
+        if not path.exists():
+            continue
+        if path.is_dir():
+            shutil.rmtree(path)
+            continue
+        path.unlink()
+
+
+def iter_task_artifact_paths(task: dict) -> list[Path]:
+    candidates: list[Path] = []
+    seen: set[str] = set()
+    for raw_path in (
+        task.get("stored_pdf_path"),
+        task.get("final_md_path"),
+        task.get("log_path"),
+        task.get("mineru_task_dir"),
+    ):
+        normalized = str(raw_path or "").strip()
+        if not normalized:
+            continue
+        path = Path(normalized).expanduser()
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(resolved)
+    candidates.sort(key=lambda item: (0 if item.is_file() else 1, len(item.parts)))
+    return candidates
 
 
 def generate_doc_id() -> str:

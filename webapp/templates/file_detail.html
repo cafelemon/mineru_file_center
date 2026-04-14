@@ -101,6 +101,33 @@
 <section class="card">
     <div class="section-head">
         <div>
+            <span class="section-kicker">Danger Zone</span>
+            <h2>删除当前文档</h2>
+        </div>
+    </div>
+    {% if file.can_delete_document %}
+    <form method="post" action="/files/{{ file.doc_id }}/delete" class="knowledge-form delete-form">
+        <div>
+            <strong>删除后不可恢复</strong>
+            <p>会删除本地原始 PDF、Markdown、任务日志、任务记录，并尝试清理 FastGPT 集合和 Bridge 映射。请输入当前登录密码确认。</p>
+        </div>
+        <label>
+            <span>确认密码</span>
+            <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <button type="submit" class="danger-button">确认删除文档</button>
+    </form>
+    {% else %}
+    <div class="empty-state compact-state">
+        <h3>当前状态不可删除</h3>
+        <p>当前版本仅支持删除处理成功或处理失败的文档，排队中或处理中请等待任务结束。</p>
+    </div>
+    {% endif %}
+</section>
+
+<section class="card">
+    <div class="section-head">
+        <div>
             <span class="section-kicker">Controlled Access</span>
             <h2>原始文件受控访问链接</h2>
         </div>

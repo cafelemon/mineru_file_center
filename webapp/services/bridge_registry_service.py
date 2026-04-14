@@ -72,3 +72,39 @@ class BridgeRegistrySyncService:
         if not isinstance(data, dict):
             raise BridgeRegistrySyncError("Bridge PDF registry 返回格式异常")
         return data
+
+    def delete_mapping(
+        self,
+        *,
+        doc_id: str,
+        collection_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not self.is_enabled():
+            raise BridgeRegistrySyncError("Bridge 管理接口地址未配置")
+
+        payload = {
+            "doc_id": str(doc_id).strip(),
+            "collection_id": str(collection_id or "").strip() or None,
+        }
+        try:
+            response = self._client.post(
+                f"{self.base_url}/admin/kb/delete-pdf",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text.strip() if exc.response is not None else ""
+            raise BridgeRegistrySyncError(
+                f"Bridge PDF registry 删除失败 status={exc.response.status_code if exc.response else 'unknown'} {detail}".strip()
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise BridgeRegistrySyncError(f"Bridge PDF registry 删除失败: {exc}") from exc
+
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise BridgeRegistrySyncError("Bridge PDF registry 删除返回了无效 JSON") from exc
+        if not isinstance(data, dict):
+            raise BridgeRegistrySyncError("Bridge PDF registry 删除返回格式异常")
+        return data
