@@ -1,0 +1,346 @@
+from __future__ import annotations
+
+import sqlite3
+from contextlib import closing
+from pathlib import Path
+from typing import Any
+
+from .config import Settings
+
+
+TASK_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS tasks (
+    doc_id TEXT PRIMARY KEY,
+    knowledge_base_code TEXT,
+    folder_path TEXT,
+    relative_source_path TEXT,
+    source_archive_name TEXT,
+    original_filename TEXT NOT NULL,
+    stored_pdf_path TEXT NOT NULL,
+    stored_pdf_filename TEXT,
+    source_file_path TEXT,
+    source_file_filename TEXT,
+    source_file_ext TEXT,
+    source_mime_type TEXT,
+    processor_type TEXT,
+    final_md_path TEXT,
+    final_md_filename TEXT,
+    upload_time TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    processed_time TEXT,
+    process_status TEXT NOT NULL,
+    error_message TEXT,
+    mineru_task_dir TEXT NOT NULL,
+    log_path TEXT NOT NULL,
+    file_sha256 TEXT,
+    notes TEXT,
+    file_size_bytes INTEGER,
+    mineru_backend TEXT NOT NULL,
+    mineru_method TEXT NOT NULL
+)
+"""
+
+OPTIONAL_TASK_COLUMNS: dict[str, str] = {
+    "knowledge_base_code": "TEXT",
+    "folder_path": "TEXT",
+    "relative_source_path": "TEXT",
+    "source_archive_name": "TEXT",
+    "stored_pdf_filename": "TEXT",
+    "source_file_path": "TEXT",
+    "source_file_filename": "TEXT",
+    "source_file_ext": "TEXT",
+    "source_mime_type": "TEXT",
+    "processor_type": "TEXT",
+    "final_md_filename": "TEXT",
+    "processed_time": "TEXT",
+    "fastgpt_dataset_id": "TEXT",
+    "fastgpt_dataset_name": "TEXT",
+    "fastgpt_collection_id": "TEXT",
+    "fastgpt_sync_status": "TEXT",
+    "fastgpt_synced_at": "TEXT",
+    "fastgpt_sync_error": "TEXT",
+}
+
+
+def _connect(settings: Settings) -> sqlite3.Connection:
+    connection = sqlite3.connect(settings.database_path)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def _task_columns(connection: sqlite3.Connection) -> set[str]:
+    return {row[1] for row in connection.execute("PRAGMA table_info(tasks)").fetchall()}
+
+
+def init_db(settings: Settings) -> None:
+    with closing(_connect(settings)) as connection:
+        connection.execute(TASK_TABLE_SQL)
+        _migrate_tasks_schema(connection)
+        connection.commit()
+    from .knowledge_bases import init_knowledge_bases
+
+    init_knowledge_bases(settings)
+
+
+def _migrate_tasks_schema(connection: sqlite3.Connection) -> None:
+    for column_name, column_type in OPTIONAL_TASK_COLUMNS.items():
+        if column_name in _task_columns(connection):
+            continue
+        try:
+            connection.execute(
+                f"ALTER TABLE tasks ADD COLUMN {column_name} {column_type}"
+            )
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+
+    connection.execute(
+        """
+        UPDATE tasks
+        SET knowledge_base_code = 'general'
+        WHERE knowledge_base_code IS NULL OR knowledge_base_code = ''
+        """
+    )
+    connection.execute(
+        """
+        UPDATE tasks
+        SET folder_path = ''
+        WHERE folder_path IS NULL
+        """
+    )
+    connection.execute(
+        """
+        UPDATE tasks
+        SET relative_source_path = original_filename
+        WHERE relative_source_path IS NULL OR relative_source_path = ''
+        """
+    )
+    connection.execute(
+        """
+        UPDATE tasks
+        SET source_archive_name = ''
+        WHERE source_archive_name IS NULL
+        """
+    )
+    connection.execute(
+        """
+        UPDATE tasks
+        SET processed_time = completed_at
+        WHERE (processed_time IS NULL OR processed_time = '')
+          AND completed_at IS NOT NULL
+          AND completed_at != ''
+        """
+    )
+    connection.execute(
+        """
+        UPDATE tasks
+        SET fastgpt_sync_status = 'pending'
+        WHERE fastgpt_sync_status IS NULL OR fastgpt_sync_status = ''
+        """
+    )
+    rows = connection.execute(
+        """
+        SELECT doc_id,
+               stored_pdf_path,
+               final_md_path,
+               stored_pdf_filename,
+               final_md_filename,
+               source_file_path,
+               source_file_filename,
+               source_file_ext,
+               source_mime_type,
+               processor_type
+        FROM tasks
+        """
+    ).fetchall()
+    for row in rows:
+        updates: dict[str, str] = {}
+        if (not row["stored_pdf_filename"]) and row["stored_pdf_path"]:
+            updates["stored_pdf_filename"] = Path(row["stored_pdf_path"]).name
+        if (not row["final_md_filename"]) and row["final_md_path"]:
+            updates["final_md_filename"] = Path(row["final_md_path"]).name
+        if (not row["source_file_path"]) and row["stored_pdf_path"]:
+            updates["source_file_path"] = row["stored_pdf_path"]
+        source_filename = row["source_file_filename"] or row["stored_pdf_filename"]
+        if (not row["source_file_filename"]) and source_filename:
+            updates["source_file_filename"] = source_filename
+        source_ext = str(row["source_file_ext"] or "").strip()
+        if not source_ext:
+            source_ext = Path(str(source_filename or row["stored_pdf_path"] or "")).suffix.lower()
+            if source_ext:
+                updates["source_file_ext"] = source_ext
+        if not row["source_mime_type"]:
+            updates["source_mime_type"] = _mime_type_for_extension(source_ext or ".pdf")
+        if not row["processor_type"]:
+            updates["processor_type"] = _processor_type_for_extension(source_ext or ".pdf")
+        if updates:
+            assignments = ", ".join(f"{key} = :{key}" for key in updates)
+            updates["doc_id"] = row["doc_id"]
+            connection.execute(
+                f"UPDATE tasks SET {assignments} WHERE doc_id = :doc_id",
+                updates,
+            )
+
+
+def _mime_type_for_extension(source_ext: str) -> str:
+    normalized = str(source_ext or "").strip().lower()
+    return {
+        ".pdf": "application/pdf",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".xlsm": "application/vnd.ms-excel.sheet.macroEnabled.12",
+    }.get(normalized, "application/octet-stream")
+
+
+def _processor_type_for_extension(source_ext: str) -> str:
+    normalized = str(source_ext or "").strip().lower()
+    if normalized == ".pdf":
+        return "mineru_pdf"
+    if normalized == ".docx":
+        return "docx_markdown"
+    if normalized in {".xlsx", ".xlsm"}:
+        return "excel_markdown"
+    return "unknown"
+
+
+def mark_incomplete_tasks_as_interrupted(settings: Settings) -> None:
+    with closing(_connect(settings)) as connection:
+        connection.execute(
+            """
+            UPDATE tasks
+            SET process_status = 'failed',
+                completed_at = COALESCE(completed_at, upload_time),
+                processed_time = COALESCE(processed_time, completed_at, upload_time),
+                error_message = CASE
+                    WHEN error_message IS NULL OR error_message = ''
+                    THEN 'Task was interrupted because the web service restarted.'
+                    ELSE error_message
+                END
+            WHERE process_status IN ('queued', 'processing')
+            """
+        )
+        connection.commit()
+
+
+def insert_task(settings: Settings, payload: dict[str, Any]) -> None:
+    columns = ", ".join(payload.keys())
+    placeholders = ", ".join(f":{key}" for key in payload)
+    with closing(_connect(settings)) as connection:
+        connection.execute(
+            f"INSERT INTO tasks ({columns}) VALUES ({placeholders})",
+            payload,
+        )
+        connection.commit()
+
+
+def update_task(settings: Settings, doc_id: str, **fields: Any) -> None:
+    if not fields:
+        return
+    assignments = ", ".join(f"{key} = :{key}" for key in fields)
+    params = dict(fields)
+    params["doc_id"] = doc_id
+    with closing(_connect(settings)) as connection:
+        connection.execute(
+            f"UPDATE tasks SET {assignments} WHERE doc_id = :doc_id",
+            params,
+        )
+        connection.commit()
+
+
+def delete_task(settings: Settings, doc_id: str) -> None:
+    with closing(_connect(settings)) as connection:
+        connection.execute("DELETE FROM tasks WHERE doc_id = ?", (doc_id,))
+        connection.commit()
+
+
+def get_task(settings: Settings, doc_id: str) -> dict[str, Any] | None:
+    with closing(_connect(settings)) as connection:
+        row = connection.execute(
+            "SELECT * FROM tasks WHERE doc_id = ?",
+            (doc_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_tasks(settings: Settings, limit: int = 200) -> list[dict[str, Any]]:
+    with closing(_connect(settings)) as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM tasks
+            ORDER BY upload_time DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_library_files(
+    settings: Settings,
+    *,
+    knowledge_base_code: str | None = None,
+    folder_path: str | None = None,
+    process_status: str | None = None,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if knowledge_base_code:
+        conditions.append("knowledge_base_code = ?")
+        params.append(knowledge_base_code)
+    normalized_folder_path = (folder_path or "").strip().strip("/")
+    if normalized_folder_path:
+        conditions.append("(folder_path = ? OR folder_path LIKE ?)")
+        params.extend([normalized_folder_path, f"{normalized_folder_path}/%"])
+    if process_status:
+        conditions.append("process_status = ?")
+        params.append(process_status)
+
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    query = f"""
+        SELECT *
+        FROM tasks
+        {where_clause}
+        ORDER BY upload_time DESC
+        LIMIT ?
+    """
+    params.append(limit)
+
+    with closing(_connect(settings)) as connection:
+        rows = connection.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_fastgpt_sync_candidates(
+    settings: Settings,
+    *,
+    doc_ids: list[str] | None = None,
+    sync_status: str | None = None,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    conditions = ["process_status = 'success'"]
+    params: list[Any] = []
+
+    if sync_status:
+        conditions.append("fastgpt_sync_status = ?")
+        params.append(sync_status)
+    if doc_ids:
+        placeholders = ", ".join("?" for _ in doc_ids)
+        conditions.append(f"doc_id IN ({placeholders})")
+        params.extend(doc_ids)
+
+    query = f"""
+        SELECT *
+        FROM tasks
+        WHERE {' AND '.join(conditions)}
+        ORDER BY upload_time DESC
+        LIMIT ?
+    """
+    params.append(limit)
+
+    with closing(_connect(settings)) as connection:
+        rows = connection.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
