@@ -60,6 +60,9 @@ OPTIONAL_TASK_COLUMNS: dict[str, str] = {
     "fastgpt_sync_status": "TEXT",
     "fastgpt_synced_at": "TEXT",
     "fastgpt_sync_error": "TEXT",
+    "source_storage_backend": "TEXT",
+    "source_remote_path": "TEXT",
+    "source_remote_url": "TEXT",
 }
 
 
@@ -121,6 +124,27 @@ def _migrate_tasks_schema(connection: sqlite3.Connection) -> None:
         UPDATE tasks
         SET source_archive_name = ''
         WHERE source_archive_name IS NULL
+        """
+    )
+    connection.execute(
+        """
+        UPDATE tasks
+        SET source_storage_backend = 'local'
+        WHERE source_storage_backend IS NULL OR source_storage_backend = ''
+        """
+    )
+    connection.execute(
+        """
+        UPDATE tasks
+        SET source_remote_path = ''
+        WHERE source_remote_path IS NULL
+        """
+    )
+    connection.execute(
+        """
+        UPDATE tasks
+        SET source_remote_url = ''
+        WHERE source_remote_url IS NULL
         """
     )
     connection.execute(

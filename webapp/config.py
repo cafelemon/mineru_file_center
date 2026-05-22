@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -67,6 +68,32 @@ def _coerce_list(raw_value: Any, default: list[str]) -> list[str]:
     return list(default)
 
 
+def _normalize_remote_root_path(raw_value: Any, default: str = "") -> str:
+    text = str(raw_value or default or "").strip().replace("\\", "/")
+    if not text:
+        return ""
+
+    parsed = urlparse(text)
+    if parsed.scheme and parsed.netloc:
+        text = parsed.path
+
+    parts: list[str] = []
+    for part in text.split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            raise ValueError("Remote storage root_path must not contain '..'")
+        parts.append(part)
+    return "/" + "/".join(parts) if parts else "/"
+
+
+def _normalize_storage_mode(raw_value: Any) -> str:
+    mode = str(raw_value or "local").strip().lower()
+    if mode not in {"local", "webdav"}:
+        raise ValueError("source_storage.mode must be either 'local' or 'webdav'")
+    return mode
+
+
 @dataclass(slots=True)
 class Settings:
     project_root: Path
@@ -102,6 +129,13 @@ class Settings:
     file_link_secret: str = ""
     file_link_expire_seconds: int = 600
     file_link_base_url: str = ""
+    source_storage_mode: str = "local"
+    source_storage_local_cache_dir: Path | None = None
+    webdav_endpoint: str = ""
+    webdav_username: str = ""
+    webdav_password: str = ""
+    webdav_root_path: str = ""
+    webdav_timeout_seconds: int = 30
     fastgpt_sync_enabled: bool = False
     fastgpt_base_url: str = ""
     fastgpt_api_key: str = ""
@@ -124,6 +158,11 @@ class Settings:
             self.database_path.parent,
         ):
             path.mkdir(parents=True, exist_ok=True)
+        if (
+            self.source_storage_mode == "webdav"
+            and self.source_storage_local_cache_dir is not None
+        ):
+            self.source_storage_local_cache_dir.mkdir(parents=True, exist_ok=True)
         if self.bridge_export_enabled:
             for path in (self.bridge_pdf_root, self.bridge_manifest_dir):
                 if path is not None:
@@ -294,6 +333,50 @@ def get_settings() -> Settings:
         os.getenv("FILE_LINK_BASE_URL")
         or _get_nested(config, "file_link", "base_url", default="")
     )
+    source_storage_mode = _normalize_storage_mode(
+        os.getenv("SOURCE_STORAGE_MODE")
+        or _get_nested(config, "source_storage", "mode", default="local")
+    )
+    raw_source_storage_local_cache = (
+        os.getenv("SOURCE_STORAGE_LOCAL_CACHE_PATH")
+        or _get_nested(config, "source_storage", "local_cache_path")
+    )
+    source_storage_local_cache_dir = (
+        _coerce_path(
+            project_root,
+            raw_source_storage_local_cache,
+            data_root / "source_cache",
+        )
+        if raw_source_storage_local_cache not in (None, "")
+        else (data_root / "source_cache").resolve()
+    )
+    webdav_endpoint = (
+        os.getenv("WEBDAV_ENDPOINT")
+        or os.getenv("WEBDAV_BASE_URL")
+        or _get_nested(config, "webdav", "endpoint", default="")
+        or _get_nested(config, "webdav_storage", "base_url", default="")
+    )
+    webdav_username = (
+        os.getenv("WEBDAV_USERNAME")
+        or _get_nested(config, "webdav", "username", default="")
+        or _get_nested(config, "webdav_storage", "username", default="")
+    )
+    webdav_password = (
+        os.getenv("WEBDAV_PASSWORD")
+        or _get_nested(config, "webdav", "password", default="")
+        or _get_nested(config, "webdav_storage", "password", default="")
+    )
+    webdav_root_path = _normalize_remote_root_path(
+        os.getenv("WEBDAV_ROOT_PATH")
+        or _get_nested(config, "webdav", "root_path", default="")
+        or _get_nested(config, "webdav_storage", "root_path", default="")
+    )
+    webdav_timeout_seconds = _coerce_int(
+        os.getenv("WEBDAV_TIMEOUT_SECONDS")
+        or _get_nested(config, "webdav", "timeout_seconds", default=30)
+        or _get_nested(config, "webdav_storage", "timeout_seconds", default=30),
+        30,
+    )
     fastgpt_sync_enabled = _coerce_bool(
         os.getenv("FASTGPT_SYNC_ENABLED")
         or _get_nested(config, "fastgpt_sync", "enabled", default=False),
@@ -358,6 +441,13 @@ def get_settings() -> Settings:
         file_link_secret=str(file_link_secret).strip(),
         file_link_expire_seconds=max(1, file_link_expire_seconds),
         file_link_base_url=str(file_link_base_url).strip().rstrip("/"),
+        source_storage_mode=source_storage_mode,
+        source_storage_local_cache_dir=source_storage_local_cache_dir,
+        webdav_endpoint=str(webdav_endpoint).strip().rstrip("/"),
+        webdav_username=str(webdav_username).strip(),
+        webdav_password=str(webdav_password),
+        webdav_root_path=webdav_root_path,
+        webdav_timeout_seconds=max(1, webdav_timeout_seconds),
         fastgpt_sync_enabled=fastgpt_sync_enabled,
         fastgpt_base_url=str(fastgpt_base_url).strip().rstrip("/"),
         fastgpt_api_key=str(fastgpt_api_key).strip(),

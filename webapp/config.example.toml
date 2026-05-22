@@ -48,3 +48,16 @@ secret = ""
 expire_seconds = 600
 # 生成给浏览器或后续 Bridge 使用的文件中心访问地址；迁移服务器后通常只需要改这里
 base_url = "http://127.0.0.1:7860"
+
+[source_storage]
+# 默认 local，保持现有本地存储行为；后续可切为 webdav 并使用本地缓存路径处理转换
+mode = "local"
+local_cache_path = "data/source_cache"
+
+[webdav]
+# 仅在 source_storage.mode = "webdav" 时使用；具体地址、账号和路径请在部署环境配置
+endpoint = ""
+username = ""
+password = ""
+root_path = ""
+timeout_seconds = 30

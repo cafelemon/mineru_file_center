@@ -133,6 +133,31 @@ base_url = "http://127.0.0.1:7860"
 
 后续迁移到 Linux 内网服务器时，如果服务端口、域名或反向代理地址变化，通常只需要修改 `FILE_LINK_BASE_URL`；如果原始文件存储根目录变化，修改 `[storage].data_root` 或 `WEB_DATA_ROOT` 等存储配置即可。
 
+原始文件存储默认继续使用本地目录，不改变现有上传、MinerU/Office 转换、`doc_id.md`、FastGPT/Bridge 回填和原文件受控链接逻辑。后续如果要把原始文件目录切到 NAS/WebDAV，可切换为远程存储模式；系统会使用 `local_cache_path` 作为本地处理缓存，上传校验通过后把原始文件 PUT 到配置的 WebDAV 远端路径，并把 `source_storage_backend`、`source_remote_path`、`source_remote_url` 写入 SQLite，便于迁移环境排查路径问题。删除文档仍按当前本地/数据库流程执行；如果 NAS 账号没有 DELETE 权限，不会影响本地删除。
+
+```toml
+[source_storage]
+mode = "webdav"
+local_cache_path = "data/source_cache"
+
+[webdav]
+endpoint = "http://<nas-host>:<webdav-port>"
+username = "<webdav-username>"
+password = "<webdav-password>"
+root_path = "<webdav-root-path>"
+timeout_seconds = 30
+```
+
+也可通过环境变量覆盖：
+
+- `SOURCE_STORAGE_MODE`
+- `SOURCE_STORAGE_LOCAL_CACHE_PATH`
+- `WEBDAV_ENDPOINT`
+- `WEBDAV_USERNAME`
+- `WEBDAV_PASSWORD`
+- `WEBDAV_ROOT_PATH`
+- `WEBDAV_TIMEOUT_SECONDS`
+
 后续 Bridge 可调用轻量 API 获取链接：
 
 ```text

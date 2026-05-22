@@ -43,6 +43,8 @@ from .services.file_link_service import (
     FileLinkServiceError,
     FileLinkValidationError,
 )
+from .services.file_commit_service import commit_uploaded_file
+from .services.source_storage_service import SourceStoragePlan, SourceStorageService
 
 
 settings = get_settings()
@@ -217,6 +219,9 @@ def enrich_record(record: dict | None) -> dict | None:
     )
     item["source_archive_name"] = item.get("source_archive_name") or "-"
     item["source_file_path"] = item.get("source_file_path") or item.get("stored_pdf_path") or ""
+    item["source_storage_backend"] = item.get("source_storage_backend") or "local"
+    item["source_remote_path"] = item.get("source_remote_path") or ""
+    item["source_remote_url"] = item.get("source_remote_url") or ""
     item["source_file_filename"] = item.get("source_file_filename") or item.get(
         "stored_pdf_filename"
     ) or (
@@ -1043,6 +1048,9 @@ def build_file_link_payload(doc_id: str, *, require_file: bool = True) -> dict |
         "expires_in": result.expires_in,
         "filename": filename,
         "file_type": source_ext.lstrip(".") or "file",
+        "source_storage_backend": task.get("source_storage_backend") or "local",
+        "source_remote_path": task.get("source_remote_path") or "",
+        "source_remote_url": task.get("source_remote_url") or "",
     }
 
 
@@ -1183,20 +1191,44 @@ def download_log(
     return FileResponse(log_path, media_type="text/plain", filename=log_path.name)
 
 
-def build_task_paths(doc_id: str, source_ext: str = ".pdf") -> dict[str, Path]:
+def build_task_paths(doc_id: str, source_ext: str = ".pdf") -> dict[str, Path | str]:
     normalized_source_ext = source_ext if source_ext.startswith(".") else f".{source_ext}"
     if not is_supported_source_extension(normalized_source_ext):
         normalized_source_ext = ".pdf"
+    source_plan = SourceStorageService(settings).build_source_plan(
+        doc_id,
+        normalized_source_ext,
+    )
     task_dir = settings.tasks_dir / doc_id
     return {
         "task_dir": task_dir,
         "raw_output_dir": task_dir / "raw_output",
         "temp_upload_path": settings.uploads_dir / f"{doc_id}.uploading",
-        "source_file_path": settings.pdf_store_dir / f"{doc_id}{normalized_source_ext}",
-        "stored_pdf_path": settings.pdf_store_dir / f"{doc_id}{normalized_source_ext}",
+        "source_file_path": source_plan.local_path,
+        "stored_pdf_path": source_plan.local_path,
         "final_md_path": settings.output_dir / f"{doc_id}.md",
         "log_path": task_dir / "task.log",
+        "source_storage_backend": source_plan.storage_backend,
+        "source_remote_path": source_plan.remote_path,
+        "source_remote_url": source_plan.remote_url,
     }
+
+
+def upload_source_file_to_remote_if_needed(task_paths: dict[str, Path | str]) -> None:
+    if str(task_paths["source_storage_backend"]) != "webdav":
+        return
+    service = SourceStorageService(settings)
+    try:
+        service.upload_source_file(
+            SourceStoragePlan(
+                local_path=Path(task_paths["source_file_path"]),
+                storage_backend=str(task_paths["source_storage_backend"]),
+                remote_path=str(task_paths["source_remote_path"]),
+                remote_url=str(task_paths["source_remote_url"]),
+            )
+        )
+    finally:
+        service.close()
 
 
 def insert_queued_task(
@@ -1216,6 +1248,9 @@ def insert_queued_task(
     task_dir: Path,
     file_sha256: str,
     file_size: int,
+    source_storage_backend: str = "local",
+    source_remote_path: str = "",
+    source_remote_url: str = "",
 ) -> None:
     db.insert_task(
         settings,
@@ -1246,6 +1281,9 @@ def insert_queued_task(
             "file_sha256": file_sha256,
             "notes": "",
             "file_size_bytes": file_size,
+            "source_storage_backend": source_storage_backend,
+            "source_remote_path": source_remote_path,
+            "source_remote_url": source_remote_url,
             "mineru_backend": settings.mineru_backend,
             "mineru_method": settings.mineru_method,
             "fastgpt_sync_status": "pending",
@@ -1279,6 +1317,7 @@ async def archive_uploaded_source_file(
             settings.max_upload_size_bytes,
             source_ext,
         )
+        upload_source_file_to_remote_if_needed(task_paths)
         insert_queued_task(
             doc_id=doc_id,
             knowledge_base_code=knowledge_base_code,
@@ -1295,6 +1334,9 @@ async def archive_uploaded_source_file(
             task_dir=task_paths["task_dir"],
             file_sha256=file_sha256,
             file_size=file_size,
+            source_storage_backend=str(task_paths["source_storage_backend"]),
+            source_remote_path=str(task_paths["source_remote_path"]),
+            source_remote_url=str(task_paths["source_remote_url"]),
         )
     except Exception:
         cleanup_paths(
@@ -1433,6 +1475,7 @@ def archive_source_file_stream(
             settings.max_upload_size_bytes,
             source_ext,
         )
+        upload_source_file_to_remote_if_needed(task_paths)
         insert_queued_task(
             doc_id=doc_id,
             knowledge_base_code=knowledge_base_code,
@@ -1449,6 +1492,9 @@ def archive_source_file_stream(
             task_dir=task_paths["task_dir"],
             file_sha256=file_sha256,
             file_size=file_size,
+            source_storage_backend=str(task_paths["source_storage_backend"]),
+            source_remote_path=str(task_paths["source_remote_path"]),
+            source_remote_url=str(task_paths["source_remote_url"]),
         )
     except Exception:
         cleanup_paths(
@@ -1544,7 +1590,7 @@ def store_source_file_stream(
         if file_size == 0:
             raise ValueError("上传文件为空。")
         validate_stored_source_file(temp_path, normalized_source_ext)
-        os.replace(temp_path, stored_source_path)
+        commit_uploaded_file(temp_path, stored_source_path)
         return sha256.hexdigest(), file_size
     finally:
         if temp_path.exists():
