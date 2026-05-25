@@ -108,6 +108,19 @@
         </form>
         {% endif %}
     </div>
+    <form method="post" action="/files/move" class="file-move-bar single-move-bar">
+        <input type="hidden" name="knowledge_base_code" value="{{ file.knowledge_base_code }}">
+        <input type="hidden" name="doc_ids" value="{{ file.doc_id }}">
+        <label>
+            <span>移动到目录</span>
+            <select name="target_folder_path">
+                {% for option in folder_options %}
+                <option value="{{ option.path }}" {% if option.path == file.folder_path %}selected{% endif %}>{{ option.label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <button type="submit">移动当前文件</button>
+    </form>
 </section>
 
 <section class="card">

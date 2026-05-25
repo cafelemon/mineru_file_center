@@ -63,6 +63,7 @@ FASTGPT_SYNC_LABELS = {
     "synced": "已同步",
     "failed": "同步失败",
 }
+FILES_PAGE_SIZE = 20
 SUPPORTED_SOURCE_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".xlsm"}
 SOURCE_MIME_TYPES = {
     ".pdf": "application/pdf",
@@ -251,6 +252,8 @@ def enrich_record(record: dict | None) -> dict | None:
         Path(final_md_path).name if final_md_path else "-"
     )
     item["processed_time"] = item.get("processed_time") or item.get("completed_at") or "-"
+    processed_time = str(item["processed_time"] or "").strip()
+    item["processed_date"] = processed_time[:10] if len(processed_time) >= 10 else processed_time or "-"
     item["status_label"] = STATUS_LABELS.get(
         item.get("process_status"),
         item.get("process_status") or "-",
@@ -283,6 +286,21 @@ def build_summary_cards(records: list[dict]) -> list[dict[str, object]]:
         1 for item in records if item["process_status"] in {"queued", "processing"}
     )
     failed_count = sum(1 for item in records if item["process_status"] == "failed")
+    return [
+        {"label": "文件总数", "value": total_count, "tone": "neutral"},
+        {"label": "已完成转换", "value": success_count, "tone": "success"},
+        {"label": "处理中", "value": processing_count, "tone": "processing"},
+        {"label": "异常文件", "value": failed_count, "tone": "failed"},
+    ]
+
+
+def build_summary_cards_from_counts(
+    *,
+    total_count: int,
+    success_count: int,
+    processing_count: int,
+    failed_count: int,
+) -> list[dict[str, object]]:
     return [
         {"label": "文件总数", "value": total_count, "tone": "neutral"},
         {"label": "已完成转换", "value": success_count, "tone": "success"},
@@ -330,11 +348,13 @@ def build_file_list_redirect_params(
     knowledge_base_code: str = "",
     folder_path: str = "",
     process_status: str = "",
+    search_query: str = "",
 ) -> dict[str, str]:
     params: dict[str, str] = {}
     normalized_knowledge_base_code = str(knowledge_base_code or "").strip()
     normalized_folder_path = normalize_folder_path(folder_path)
     normalized_process_status = str(process_status or "").strip()
+    normalized_search_query = str(search_query or "").strip()
 
     if normalized_knowledge_base_code:
         params["knowledge_base_code"] = normalized_knowledge_base_code
@@ -342,6 +362,8 @@ def build_file_list_redirect_params(
         params["folder_path"] = normalized_folder_path
     if normalized_process_status:
         params["process_status"] = normalized_process_status
+    if normalized_search_query:
+        params["q"] = normalized_search_query
     return params
 
 
@@ -374,6 +396,13 @@ def normalize_folder_path(raw_value: object) -> str:
         return ""
     normalized = "/".join(part for part in text.split("/") if part and part != ".")
     return normalized.strip("/")
+
+
+def normalize_folder_name(raw_value: object) -> str:
+    text = str(raw_value or "").strip().replace("\\", "/")
+    if not text or "/" in text or text in {".", ".."}:
+        raise ValueError("目录名称不能为空，且不能包含 / 或 ..")
+    return text
 
 
 def normalize_relative_source_path(raw_value: object) -> str:
@@ -418,8 +447,23 @@ def build_folder_tree(
     knowledge_base_code: str,
     selected_folder_path: str,
     selected_process_status: str,
+    selected_search_query: str = "",
 ) -> list[dict[str, object]]:
     nodes: dict[str, dict[str, object]] = {}
+    explicit_count_mode = any("file_count" in record for record in records)
+    counts: dict[str, int] = {}
+
+    for record in records:
+        folder_path = normalize_folder_path(record.get("folder_path"))
+        if not folder_path:
+            continue
+        if explicit_count_mode:
+            counts[folder_path] = int(record.get("file_count") or 0)
+            continue
+        current_path = ""
+        for part in folder_path.split("/"):
+            current_path = part if not current_path else f"{current_path}/{part}"
+            counts[current_path] = counts.get(current_path, 0) + 1
 
     for record in records:
         folder_path = normalize_folder_path(record.get("folder_path"))
@@ -434,11 +478,11 @@ def build_folder_tree(
                 {
                     "name": part,
                     "path": current_path,
-                    "count": 0,
+                    "count": counts.get(current_path, 0),
                     "children": {},
                 },
             )
-            node["count"] = int(node["count"]) + 1
+            node["count"] = counts.get(current_path, 0)
             parent_lookup = node["children"]  # type: ignore[assignment]
 
     def finalize(children: dict[str, dict[str, object]]) -> list[dict[str, object]]:
@@ -455,12 +499,18 @@ def build_folder_tree(
             params = {"knowledge_base_code": knowledge_base_code, "folder_path": folder_path}
             if selected_process_status:
                 params["process_status"] = selected_process_status
+            if selected_search_query:
+                params["q"] = selected_search_query
             finalized.append(
                 {
                     "name": item["name"],
                     "path": folder_path,
                     "count": item["count"],
                     "is_active": folder_path == selected_folder_path,
+                    "is_expanded": (
+                        folder_path == selected_folder_path
+                        or selected_folder_path.startswith(f"{folder_path}/")
+                    ),
                     "href": f"/files?{urlencode(params)}",
                     "children": finalize(item["children"]),  # type: ignore[arg-type]
                 }
@@ -468,6 +518,132 @@ def build_folder_tree(
         return finalized
 
     return finalize(nodes)
+
+
+def build_folder_file_counts(records: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in records:
+        folder_path = normalize_folder_path(record.get("folder_path"))
+        if not folder_path:
+            continue
+        current_path = ""
+        for part in folder_path.split("/"):
+            current_path = part if not current_path else f"{current_path}/{part}"
+            counts[current_path] = counts.get(current_path, 0) + 1
+    return counts
+
+
+def build_folder_rows_with_counts(
+    *,
+    knowledge_base_code: str,
+) -> list[dict[str, object]]:
+    folders = db.list_knowledge_folders(settings, knowledge_base_code)
+    counts = db.list_folder_file_counts(settings, knowledge_base_code)
+    return [
+        {
+            "folder_path": normalize_folder_path(folder.get("folder_path")),
+            "file_count": counts.get(normalize_folder_path(folder.get("folder_path")), 0),
+        }
+        for folder in folders
+    ]
+
+
+def build_folder_options(folder_rows: list[dict[str, object]]) -> list[dict[str, str]]:
+    options = [{"path": "", "label": "知识库根目录"}]
+    for folder in folder_rows:
+        folder_path = normalize_folder_path(folder.get("folder_path"))
+        if folder_path:
+            options.append({"path": folder_path, "label": folder_path})
+    return options
+
+
+def build_knowledge_tree(
+    *,
+    knowledge_bases: list[dict],
+    selected_knowledge_base_code: str,
+    selected_folder_path: str,
+    selected_process_status: str,
+    selected_search_query: str,
+    folder_rows_by_code: dict[str, list[dict[str, object]]],
+) -> list[dict[str, object]]:
+    tree: list[dict[str, object]] = []
+    for knowledge_base in knowledge_bases:
+        code = str(knowledge_base["code"])
+        is_active = code == selected_knowledge_base_code
+        params = {"knowledge_base_code": code}
+        if selected_process_status:
+            params["process_status"] = selected_process_status
+        if selected_search_query:
+            params["q"] = selected_search_query
+        folder_tree = build_folder_tree(
+            folder_rows_by_code.get(code, []),
+            knowledge_base_code=code,
+            selected_folder_path=selected_folder_path if is_active else "",
+            selected_process_status=selected_process_status,
+            selected_search_query=selected_search_query,
+        )
+        tree.append(
+            {
+                **knowledge_base,
+                "is_active": is_active,
+                "is_expanded": is_active,
+                "href": f"/files?{urlencode(params)}",
+                "root_href": f"/files?{urlencode(params)}",
+                "root_count": db.count_library_files(settings, knowledge_base_code=code),
+                "folder_tree": folder_tree,
+            }
+        )
+    return tree
+
+
+def build_pagination(
+    *,
+    page: int,
+    total_count: int,
+    page_size: int,
+    params: dict[str, str],
+) -> dict[str, object]:
+    total_pages = max(1, (total_count + page_size - 1) // page_size)
+    current_page = min(max(1, page), total_pages)
+
+    def href(page_number: int) -> str:
+        next_params = dict(params)
+        if page_number > 1:
+            next_params["page"] = str(page_number)
+        return f"/files?{urlencode(next_params)}" if next_params else "/files"
+
+    page_numbers = sorted(
+        {
+            1,
+            total_pages,
+            *range(max(1, current_page - 2), min(total_pages, current_page + 2) + 1),
+        }
+    )
+    page_items: list[dict[str, object]] = []
+    previous_number = 0
+    for page_number in page_numbers:
+        if previous_number and page_number - previous_number > 1:
+            page_items.append({"ellipsis": True})
+        page_items.append(
+            {
+                "number": page_number,
+                "href": href(page_number),
+                "is_current": page_number == current_page,
+            }
+        )
+        previous_number = page_number
+
+    return {
+        "page": current_page,
+        "page_size": page_size,
+        "total_count": total_count,
+        "total_pages": total_pages,
+        "has_previous": current_page > 1,
+        "has_next": current_page < total_pages,
+        "previous_href": href(current_page - 1),
+        "next_href": href(current_page + 1),
+        "pages": page_items,
+    }
 
 
 @app.get("/healthz")
@@ -658,6 +834,8 @@ def file_list(
     knowledge_base_code: str = "",
     folder_path: str = "",
     process_status: str = "",
+    q: str = "",
+    page: int = 1,
     _: None = Depends(require_login),
 ) -> HTMLResponse:
     selected_knowledge_base_code = knowledge_base_code.strip()
@@ -668,14 +846,11 @@ def file_list(
         selected_knowledge_base_code = ""
     selected_folder_path = normalize_folder_path(folder_path if selected_knowledge_base_code else "")
     selected_status = process_status.strip()
+    if selected_status not in {"", "queued", "processing", "success", "failed"}:
+        selected_status = ""
+    selected_search_query = str(q or "").strip()
     folder_records = (
-        enrich_records(
-            db.list_library_files(
-                settings,
-                knowledge_base_code=selected_knowledge_base_code or None,
-                limit=5000,
-            )
-        )
+        build_folder_rows_with_counts(knowledge_base_code=selected_knowledge_base_code)
         if selected_knowledge_base_code
         else []
     )
@@ -685,18 +860,68 @@ def file_list(
     if selected_folder_path and selected_folder_path not in available_folder_paths:
         selected_folder_path = ""
 
+    base_params = build_file_list_redirect_params(
+        knowledge_base_code=selected_knowledge_base_code,
+        folder_path=selected_folder_path,
+        process_status=selected_status,
+        search_query=selected_search_query,
+    )
+    total_files = db.count_library_files(
+        settings,
+        knowledge_base_code=selected_knowledge_base_code or None,
+        folder_path=selected_folder_path or None,
+        process_status=selected_status or None,
+        search_query=selected_search_query or None,
+    )
+    pagination = build_pagination(
+        page=page,
+        total_count=total_files,
+        page_size=FILES_PAGE_SIZE,
+        params=base_params,
+    )
+
     files = enrich_records(
         db.list_library_files(
             settings,
             knowledge_base_code=selected_knowledge_base_code or None,
             folder_path=selected_folder_path or None,
             process_status=selected_status or None,
+            search_query=selected_search_query or None,
+            limit=FILES_PAGE_SIZE,
+            offset=(int(pagination["page"]) - 1) * FILES_PAGE_SIZE,
         )
     )
-    failed_file_count = sum(1 for item in files if item["process_status"] == "failed")
-    has_active_tasks = any(
-        item["process_status"] in {"queued", "processing"} for item in files
+    failed_file_count = (
+        total_files
+        if selected_status == "failed"
+        else (
+            0
+            if selected_status
+            else db.count_library_files(
+                settings,
+                knowledge_base_code=selected_knowledge_base_code or None,
+                folder_path=selected_folder_path or None,
+                process_status="failed",
+                search_query=selected_search_query or None,
+            )
+        )
     )
+    active_file_count = (
+        total_files
+        if selected_status in {"queued", "processing"}
+        else (
+            0
+            if selected_status
+            else db.count_library_files(
+                settings,
+                knowledge_base_code=selected_knowledge_base_code or None,
+                folder_path=selected_folder_path or None,
+                process_status=("queued", "processing"),
+                search_query=selected_search_query or None,
+            )
+        )
+    )
+    has_active_tasks = active_file_count > 0
     knowledge_bases = list_knowledge_bases(settings)
     selected_knowledge_base = next(
         (
@@ -706,16 +931,50 @@ def file_list(
         ),
         None,
     )
-    folder_tree = (
-        build_folder_tree(
-            folder_records,
-            knowledge_base_code=selected_knowledge_base_code,
-            selected_folder_path=selected_folder_path,
-            selected_process_status=selected_status,
+    folder_rows_by_code = {
+        str(knowledge_base["code"]): build_folder_rows_with_counts(
+            knowledge_base_code=str(knowledge_base["code"])
         )
-        if selected_knowledge_base_code
-        else []
+        for knowledge_base in knowledge_bases
+    }
+    if selected_knowledge_base_code:
+        folder_records = folder_rows_by_code.get(selected_knowledge_base_code, [])
+    success_count = (
+        total_files
+        if selected_status == "success"
+        else (
+            0
+            if selected_status
+            else db.count_library_files(
+                settings,
+                knowledge_base_code=selected_knowledge_base_code or None,
+                folder_path=selected_folder_path or None,
+                process_status="success",
+                search_query=selected_search_query or None,
+            )
+        )
     )
+    knowledge_tree = build_knowledge_tree(
+        knowledge_bases=knowledge_bases,
+        selected_knowledge_base_code=selected_knowledge_base_code,
+        selected_folder_path=selected_folder_path,
+        selected_process_status=selected_status,
+        selected_search_query=selected_search_query,
+        folder_rows_by_code=folder_rows_by_code,
+    )
+    selected_knowledge_tree = next(
+        (
+            item
+            for item in knowledge_tree
+            if str(item.get("code") or "") == selected_knowledge_base_code
+        ),
+        None,
+    )
+    all_files_params: dict[str, str] = {}
+    if selected_status:
+        all_files_params["process_status"] = selected_status
+    if selected_search_query:
+        all_files_params["q"] = selected_search_query
     return render(
         request,
         "files.html",
@@ -723,17 +982,234 @@ def file_list(
             "title": "知识库文件管理",
             "nav_section": "files",
             "files": files,
-            "summary_cards": build_summary_cards(files),
+            "summary_cards": build_summary_cards_from_counts(
+                total_count=total_files,
+                success_count=success_count,
+                processing_count=active_file_count,
+                failed_count=failed_file_count,
+            ),
             "has_active_tasks": has_active_tasks,
             "selected_knowledge_base_code": selected_knowledge_base_code,
             "selected_knowledge_base": selected_knowledge_base,
             "selected_folder_path": selected_folder_path,
             "selected_folder_path_display": selected_folder_path or "知识库根目录",
             "selected_process_status": selected_status,
-            "folder_tree": folder_tree,
+            "selected_search_query": selected_search_query,
+            "folder_tree": knowledge_tree,
+            "knowledge_tree": knowledge_tree,
+            "selected_knowledge_tree": selected_knowledge_tree,
+            "folder_options": build_folder_options(folder_records),
+            "pagination": pagination,
             "failed_file_count": failed_file_count,
+            "all_files_href": f"/files?{urlencode(all_files_params)}" if all_files_params else "/files",
         },
     )
+
+
+@app.post("/folders")
+def create_folder_route(
+    knowledge_base_code: str = Form(...),
+    parent_folder_path: str = Form(default=""),
+    folder_name: str = Form(...),
+    process_status: str = Form(default=""),
+    q: str = Form(default=""),
+    _: None = Depends(require_login),
+):
+    normalized_knowledge_base_code = knowledge_base_code.strip()
+    parent_path = normalize_folder_path(parent_folder_path)
+    redirect_params = build_file_list_redirect_params(
+        knowledge_base_code=normalized_knowledge_base_code,
+        folder_path=parent_path,
+        process_status=process_status,
+        search_query=q,
+    )
+
+    if not knowledge_base_exists(settings, normalized_knowledge_base_code):
+        return RedirectResponse(
+            url=f"/files?{urlencode({'error': '请选择有效的所属知识库'})}",
+            status_code=303,
+        )
+    if parent_path and not db.folder_exists(settings, normalized_knowledge_base_code, parent_path):
+        redirect_params["error"] = "父目录不存在"
+        return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+
+    try:
+        normalized_folder_name = normalize_folder_name(folder_name)
+    except ValueError as exc:
+        redirect_params["error"] = str(exc)
+        return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+
+    folder_path = normalize_folder_path(
+        f"{parent_path}/{normalized_folder_name}" if parent_path else normalized_folder_name
+    )
+    if db.folder_exists(settings, normalized_knowledge_base_code, folder_path):
+        redirect_params["error"] = "目录已存在"
+        return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+
+    db.create_knowledge_folder(
+        settings,
+        knowledge_base_code=normalized_knowledge_base_code,
+        folder_path=folder_path,
+    )
+    redirect_params["folder_path"] = folder_path
+    redirect_params["message"] = f"已新建目录：{folder_path}"
+    return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+
+
+@app.post("/folders/delete")
+def delete_folder_route(
+    knowledge_base_code: str = Form(...),
+    folder_path: str = Form(...),
+    process_status: str = Form(default=""),
+    q: str = Form(default=""),
+    _: None = Depends(require_login),
+):
+    normalized_knowledge_base_code = knowledge_base_code.strip()
+    normalized_folder_path = normalize_folder_path(folder_path)
+    parent = str(PurePosixPath(normalized_folder_path).parent) if normalized_folder_path else ""
+    parent_path = "" if parent in {"", "."} else normalize_folder_path(parent)
+    redirect_params = build_file_list_redirect_params(
+        knowledge_base_code=normalized_knowledge_base_code,
+        folder_path=parent_path,
+        process_status=process_status,
+        search_query=q,
+    )
+
+    if not normalized_folder_path:
+        redirect_params["error"] = "知识库根目录不能删除"
+        return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+    if not db.folder_exists(settings, normalized_knowledge_base_code, normalized_folder_path):
+        redirect_params["error"] = "目录不存在或已删除"
+        return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+    if db.count_child_folders(
+        settings,
+        knowledge_base_code=normalized_knowledge_base_code,
+        folder_path=normalized_folder_path,
+    ):
+        redirect_params["folder_path"] = normalized_folder_path
+        redirect_params["error"] = "目录下还有子目录，不能删除"
+        return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+    if db.count_library_files(
+        settings,
+        knowledge_base_code=normalized_knowledge_base_code,
+        folder_path=normalized_folder_path,
+    ):
+        redirect_params["folder_path"] = normalized_folder_path
+        redirect_params["error"] = "目录下还有文件，不能删除"
+        return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+
+    db.delete_knowledge_folder(
+        settings,
+        knowledge_base_code=normalized_knowledge_base_code,
+        folder_path=normalized_folder_path,
+    )
+    redirect_params["message"] = f"已删除目录：{normalized_folder_path}"
+    return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+
+
+@app.post("/folders/rename")
+def rename_folder_route(
+    knowledge_base_code: str = Form(...),
+    folder_path: str = Form(...),
+    new_folder_name: str = Form(...),
+    process_status: str = Form(default=""),
+    q: str = Form(default=""),
+    _: None = Depends(require_login),
+):
+    normalized_knowledge_base_code = knowledge_base_code.strip()
+    normalized_folder_path = normalize_folder_path(folder_path)
+    redirect_params = build_file_list_redirect_params(
+        knowledge_base_code=normalized_knowledge_base_code,
+        folder_path=normalized_folder_path,
+        process_status=process_status,
+        search_query=q,
+    )
+
+    if not knowledge_base_exists(settings, normalized_knowledge_base_code):
+        return RedirectResponse(
+            url=f"/files?{urlencode({'error': '请选择有效的所属知识库'})}",
+            status_code=303,
+        )
+    if not normalized_folder_path:
+        redirect_params["error"] = "知识库根目录不能重命名"
+        return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+    if not db.folder_exists(settings, normalized_knowledge_base_code, normalized_folder_path):
+        redirect_params["error"] = "目录不存在或已删除"
+        return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+
+    try:
+        normalized_new_name = normalize_folder_name(new_folder_name)
+    except ValueError as exc:
+        redirect_params["error"] = str(exc)
+        return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+
+    parent = str(PurePosixPath(normalized_folder_path).parent)
+    parent_path = "" if parent in {"", "."} else normalize_folder_path(parent)
+    target_folder_path = normalize_folder_path(
+        f"{parent_path}/{normalized_new_name}" if parent_path else normalized_new_name
+    )
+    if target_folder_path == normalized_folder_path:
+        redirect_params["error"] = "目录名称未变化"
+        return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+    if db.folder_exists(settings, normalized_knowledge_base_code, target_folder_path):
+        redirect_params["error"] = "同级目录已存在"
+        return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+
+    new_path = db.rename_knowledge_folder(
+        settings,
+        knowledge_base_code=normalized_knowledge_base_code,
+        folder_path=normalized_folder_path,
+        new_folder_name=normalized_new_name,
+    )
+    if not new_path:
+        redirect_params["error"] = "目录重命名失败，请确认目标目录未被占用"
+        return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+    redirect_params["folder_path"] = new_path
+    redirect_params["message"] = f"已重命名目录：{normalized_folder_path} -> {new_path}"
+    return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+
+
+@app.post("/files/move")
+def move_files_route(
+    knowledge_base_code: str = Form(...),
+    doc_ids: list[str] | None = Form(default=None),
+    target_folder_path: str = Form(default=""),
+    process_status: str = Form(default=""),
+    q: str = Form(default=""),
+    _: None = Depends(require_login),
+):
+    normalized_knowledge_base_code = knowledge_base_code.strip()
+    target_path = normalize_folder_path(target_folder_path)
+    redirect_params = build_file_list_redirect_params(
+        knowledge_base_code=normalized_knowledge_base_code,
+        folder_path=target_path,
+        process_status=process_status,
+        search_query=q,
+    )
+    if not knowledge_base_exists(settings, normalized_knowledge_base_code):
+        return RedirectResponse(
+            url=f"/files?{urlencode({'error': '请选择有效的所属知识库'})}",
+            status_code=303,
+        )
+    if target_path and not db.folder_exists(settings, normalized_knowledge_base_code, target_path):
+        redirect_params["error"] = "目标目录不存在"
+        return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+    normalized_doc_ids = [str(doc_id).strip() for doc_id in (doc_ids or []) if str(doc_id).strip()]
+    if not normalized_doc_ids:
+        redirect_params["error"] = "请先选择要移动的文件"
+        return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+
+    moved_count = db.move_tasks_to_folder(
+        settings,
+        knowledge_base_code=normalized_knowledge_base_code,
+        doc_ids=normalized_doc_ids,
+        target_folder_path=target_path,
+    )
+    if moved_count == 0:
+        redirect_params["error"] = "没有可移动的文件，请确认文件仍属于当前知识库"
+        return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
+    redirect_params["message"] = f"已移动 {moved_count} 个文件到{target_path or '知识库根目录'}"
+    return RedirectResponse(url=f"/files?{urlencode(redirect_params)}", status_code=303)
 
 
 @app.post("/knowledge-bases")
@@ -795,6 +1271,9 @@ def file_detail(
     if file_record is None:
         raise HTTPException(status_code=404, detail="File not found")
     file_link = build_file_link_payload(doc_id, require_file=False)
+    detail_folder_rows = build_folder_rows_with_counts(
+        knowledge_base_code=str(file_record.get("knowledge_base_code") or "")
+    )
     return render(
         request,
         "file_detail.html",
@@ -806,6 +1285,7 @@ def file_detail(
             "pdf_link": file_link,
             "file_link_enabled": settings.file_link_enabled,
             "file_link_error": "" if file_link else build_file_link_error_hint(doc_id),
+            "folder_options": build_folder_options(detail_folder_rows),
         },
     )
 
@@ -904,6 +1384,7 @@ def delete_failed_documents(
     knowledge_base_code: str = Form(default=""),
     folder_path: str = Form(default=""),
     process_status: str = Form(default=""),
+    q: str = Form(default=""),
     _: None = Depends(require_login),
 ):
     del request
@@ -911,6 +1392,7 @@ def delete_failed_documents(
         knowledge_base_code=knowledge_base_code,
         folder_path=folder_path,
         process_status=process_status,
+        search_query=q,
     )
 
     if not secrets.compare_digest(password, settings.password):
@@ -925,6 +1407,7 @@ def delete_failed_documents(
         knowledge_base_code=str(knowledge_base_code or "").strip() or None,
         folder_path=normalize_folder_path(folder_path) or None,
         process_status=str(process_status or "").strip() or None,
+        search_query=str(q or "").strip() or None,
         limit=5000,
     )
     failed_tasks = [

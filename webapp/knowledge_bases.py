@@ -182,6 +182,10 @@ def delete_knowledge_base(settings: Settings, code: str) -> None:
             raise KnowledgeBaseInUseError("该知识库下已有文件，不能删除")
 
         connection.execute(
+            "DELETE FROM knowledge_folders WHERE knowledge_base_code = ?",
+            (normalized_code,),
+        )
+        connection.execute(
             "DELETE FROM knowledge_bases WHERE code = ?",
             (normalized_code,),
         )

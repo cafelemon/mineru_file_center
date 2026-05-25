@@ -115,12 +115,16 @@ class ZipUploadAndFolderTests(unittest.TestCase):
             knowledge_base_code="general",
             selected_folder_path="制度库/人事",
             selected_process_status="success",
+            selected_search_query="员工",
         )
 
         self.assertEqual(tree[0]["name"], "制度库")
+        self.assertTrue(tree[0]["is_expanded"])
         hr_node = tree[0]["children"][0]
         self.assertEqual(hr_node["path"], "制度库/人事")
         self.assertTrue(hr_node["is_active"])
+        self.assertIn("process_status=success", hr_node["href"])
+        self.assertIn("q=%E5%91%98%E5%B7%A5", hr_node["href"])
         self.assertIn("folder_path=%E5%88%B6%E5%BA%A6%E5%BA%93%2F%E4%BA%BA%E4%BA%8B", hr_node["href"])
 
     def test_upload_zip_creates_tasks_with_folder_metadata(self):
@@ -231,10 +235,24 @@ class ZipUploadAndFolderTests(unittest.TestCase):
 
                 response = client.get(
                     "/files",
-                    params={"knowledge_base_code": "general", "folder_path": "制度库/人事"},
+                    params={
+                        "knowledge_base_code": "general",
+                        "folder_path": "制度库/人事",
+                        "q": "员工",
+                    },
                 )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("目录树", response.text)
-        self.assertIn("制度库/人事/员工手册.pdf", response.text)
-        self.assertIn("batch.zip", response.text)
+        self.assertIn("知识库目录", response.text)
+        self.assertIn("files-toolbar", response.text)
+        self.assertIn("data-select-all", response.text)
+        self.assertIn("data-files-move-form", response.text)
+        self.assertIn("data-folder-picker", response.text)
+        self.assertIn("data-folder-picker-input", response.text)
+        self.assertIn("data-folder-rename-toggle", response.text)
+        self.assertIn("/folders/rename", response.text)
+        self.assertIn('name="q" value="员工"', response.text)
+        self.assertIn("目标目录", response.text)
+        self.assertIn("新建目录", response.text)
+        self.assertIn("制度库/人事", response.text)
+        self.assertIn("员工手册.pdf", response.text)
