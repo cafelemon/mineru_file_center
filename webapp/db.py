@@ -353,6 +353,8 @@ def list_library_files(
     folder_path: str | None = None,
     process_status: str | None = None,
     search_query: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
     limit: int = 500,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -363,11 +365,12 @@ def list_library_files(
         search_query=search_query,
     )
     where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    order_clause = _library_file_order_clause(sort_by=sort_by, sort_dir=sort_dir)
     query = f"""
         SELECT *
         FROM tasks
         {where_clause}
-        ORDER BY upload_time DESC
+        ORDER BY {order_clause}
         LIMIT ?
         OFFSET ?
     """
@@ -443,6 +446,24 @@ def _library_file_conditions(
         )
         params.extend([pattern, pattern, pattern, pattern])
     return conditions, params
+
+
+def _library_file_order_clause(*, sort_by: str | None = None, sort_dir: str | None = None) -> str:
+    normalized_sort_by = str(sort_by or "").strip()
+    normalized_sort_dir = str(sort_dir or "").strip().lower()
+    direction = "ASC" if normalized_sort_dir == "asc" else "DESC"
+
+    if normalized_sort_by == "name":
+        return (
+            f"LOWER(COALESCE(original_filename, '')) {direction}, "
+            f"upload_time {direction}, doc_id {direction}"
+        )
+    if normalized_sort_by == "processed_time":
+        return (
+            f"COALESCE(NULLIF(processed_time, ''), NULLIF(completed_at, ''), upload_time) {direction}, "
+            f"upload_time {direction}, doc_id {direction}"
+        )
+    return "upload_time DESC, doc_id DESC"
 
 
 def list_knowledge_folders(settings: Settings, knowledge_base_code: str) -> list[dict[str, Any]]:

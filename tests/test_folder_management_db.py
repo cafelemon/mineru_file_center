@@ -30,6 +30,9 @@ def insert_record(
     folder_path: str,
     original_filename: str = "demo.pdf",
     knowledge_base_code: str = "general",
+    upload_time: str | None = None,
+    processed_time: str | None = None,
+    completed_at: str | None = None,
 ):
     db.insert_task(
         settings,
@@ -44,10 +47,10 @@ def insert_record(
             "stored_pdf_filename": f"{doc_id}.pdf",
             "final_md_path": str(settings.output_dir / f"{doc_id}.md"),
             "final_md_filename": f"{doc_id}.md",
-            "upload_time": f"2026-01-01T00:00:{doc_id[-1]}+00:00",
+            "upload_time": upload_time or f"2026-01-01T00:00:{doc_id[-1]}+00:00",
             "started_at": None,
-            "completed_at": None,
-            "processed_time": None,
+            "completed_at": completed_at,
+            "processed_time": processed_time,
             "process_status": "success",
             "error_message": "",
             "mineru_task_dir": str(settings.tasks_dir / doc_id),
@@ -184,6 +187,81 @@ class FolderManagementDbTests(unittest.TestCase):
             ),
             1,
         )
+
+    def test_list_library_files_supports_name_sort(self):
+        insert_record(
+            self.settings,
+            doc_id="doc-b",
+            folder_path="",
+            original_filename="B-file.pdf",
+            upload_time="2026-01-01T00:00:02+00:00",
+        )
+        insert_record(
+            self.settings,
+            doc_id="doc-a",
+            folder_path="",
+            original_filename="A-file.pdf",
+            upload_time="2026-01-01T00:00:01+00:00",
+        )
+        insert_record(
+            self.settings,
+            doc_id="doc-c",
+            folder_path="",
+            original_filename="A-file.pdf",
+            upload_time="2026-01-01T00:00:03+00:00",
+        )
+
+        ascending = db.list_library_files(
+            self.settings,
+            sort_by="name",
+            sort_dir="asc",
+        )
+        descending = db.list_library_files(
+            self.settings,
+            sort_by="name",
+            sort_dir="desc",
+        )
+
+        self.assertEqual([item["doc_id"] for item in ascending], ["doc-a", "doc-c", "doc-b"])
+        self.assertEqual([item["doc_id"] for item in descending], ["doc-b", "doc-c", "doc-a"])
+
+    def test_list_library_files_supports_processed_time_sort_with_fallback(self):
+        insert_record(
+            self.settings,
+            doc_id="doc-a",
+            folder_path="制度库",
+            original_filename="甲.pdf",
+            upload_time="2026-01-01T00:00:01+00:00",
+            processed_time="2026-01-03T00:00:00+00:00",
+        )
+        insert_record(
+            self.settings,
+            doc_id="doc-b",
+            folder_path="制度库",
+            original_filename="乙.pdf",
+            upload_time="2026-01-02T00:00:00+00:00",
+            processed_time=None,
+            completed_at="2026-01-04T00:00:00+00:00",
+        )
+        insert_record(
+            self.settings,
+            doc_id="doc-c",
+            folder_path="其他",
+            original_filename="丙.pdf",
+            upload_time="2026-01-05T00:00:00+00:00",
+            processed_time=None,
+        )
+
+        results = db.list_library_files(
+            self.settings,
+            folder_path="制度库",
+            search_query=".pdf",
+            process_status="success",
+            sort_by="processed_time",
+            sort_dir="asc",
+        )
+
+        self.assertEqual([item["doc_id"] for item in results], ["doc-a", "doc-b"])
 
     def test_rename_knowledge_folder_updates_descendants_and_tasks(self):
         insert_record(

@@ -1265,12 +1265,17 @@ button:hover,
 
 .files-search-row {
     display: grid;
-    grid-template-columns: minmax(260px, 1fr) auto;
+    grid-template-columns: minmax(260px, 1fr) minmax(138px, 170px) minmax(112px, 136px) auto auto;
     gap: 10px;
     align-items: end;
 }
 
 .search-control {
+    min-width: 0;
+}
+
+.sort-control,
+.sort-dir-control {
     min-width: 0;
 }
 
@@ -1420,14 +1425,23 @@ button:hover,
 
 .toolbar-button {
     min-height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     padding: 10px 16px;
     box-shadow: none;
+    text-decoration: none;
 }
 
 .toolbar-button.secondary-button {
     background: #fff;
     border: 1px solid var(--line);
     color: var(--brand);
+}
+
+.toolbar-button.export-button {
+    background: linear-gradient(135deg, var(--accent) 0%, #0b5f58 100%);
+    color: #fff;
 }
 
 .toolbar-button:disabled {

@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import unittest
 from unittest.mock import patch
+import xml.etree.ElementTree as ET
 import zipfile
 
 from fastapi.testclient import TestClient
@@ -16,6 +17,7 @@ from webapp.main import (
     build_folder_tree,
     normalize_folder_path,
 )
+from webapp.services.file_inventory_export_service import build_file_inventory_sheets
 from webapp import main as main_module
 
 
@@ -252,7 +254,186 @@ class ZipUploadAndFolderTests(unittest.TestCase):
         self.assertIn("data-folder-rename-toggle", response.text)
         self.assertIn("/folders/rename", response.text)
         self.assertIn('name="q" value="员工"', response.text)
+        self.assertIn('name="sort_by"', response.text)
+        self.assertIn('name="sort_dir"', response.text)
+        self.assertIn("/files/export.xlsx", response.text)
         self.assertIn("目标目录", response.text)
         self.assertIn("新建目录", response.text)
         self.assertIn("制度库/人事", response.text)
         self.assertIn("员工手册.pdf", response.text)
+
+    def test_file_inventory_sheets_group_by_knowledge_base_or_root_folder(self):
+        records = [
+            {
+                "knowledge_base_code": "general",
+                "folder_path": "",
+                "original_filename": "根目录文件.pdf",
+            },
+            {
+                "knowledge_base_code": "general",
+                "folder_path": "制度库/人事",
+                "original_filename": "员工手册.pdf",
+            },
+            {
+                "knowledge_base_code": "quality_system",
+                "folder_path": "检查表",
+                "original_filename": "检验规范.pdf",
+            },
+        ]
+        knowledge_bases = [
+            {"code": "general", "display_name": "通用知识库"},
+            {"code": "quality_system", "display_name": "质量体系部知识库"},
+        ]
+
+        all_sheets = build_file_inventory_sheets(
+            records,
+            knowledge_bases=knowledge_bases,
+        )
+        selected_sheets = build_file_inventory_sheets(
+            records[:2],
+            knowledge_bases=knowledge_bases,
+            selected_knowledge_base_code="general",
+        )
+
+        self.assertEqual([name for name, _ in all_sheets], ["总表", "通用知识库", "质量体系部知识库"])
+        self.assertEqual([name for name, _ in selected_sheets], ["总表", "知识库根目录", "制度库"])
+
+    def test_files_export_xlsx_for_all_knowledge_bases(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+
+        settings = build_settings(tmp_path)
+
+        with patch.object(main_module, "settings", settings):
+            with TestClient(app) as client:
+                for doc_id, knowledge_base_code, original_filename in (
+                    ("doc-a", "general", "员工手册.pdf"),
+                    ("doc-b", "quality_system", "检验规范.pdf"),
+                ):
+                    db.insert_task(
+                        settings,
+                        {
+                            "doc_id": doc_id,
+                            "knowledge_base_code": knowledge_base_code,
+                            "folder_path": "制度库" if knowledge_base_code == "general" else "检查表",
+                            "relative_source_path": original_filename,
+                            "source_archive_name": "",
+                            "original_filename": original_filename,
+                            "stored_pdf_path": str(settings.pdf_store_dir / f"{doc_id}.pdf"),
+                            "stored_pdf_filename": f"{doc_id}.pdf",
+                            "final_md_path": str(settings.output_dir / f"{doc_id}.md"),
+                            "final_md_filename": f"{doc_id}.md",
+                            "upload_time": "2026-01-01T00:00:00+00:00",
+                            "started_at": None,
+                            "completed_at": None,
+                            "processed_time": None,
+                            "process_status": "success",
+                            "error_message": "",
+                            "mineru_task_dir": str(settings.tasks_dir / doc_id),
+                            "log_path": str(settings.tasks_dir / doc_id / "task.log"),
+                            "file_sha256": "",
+                            "notes": "",
+                            "file_size_bytes": 128,
+                            "mineru_backend": settings.mineru_backend,
+                            "mineru_method": settings.mineru_method,
+                            "fastgpt_sync_status": "synced",
+                            "fastgpt_sync_error": "",
+                        },
+                    )
+                response = client.post(
+                    "/login",
+                    data={"username": settings.username, "password": settings.password},
+                    follow_redirects=False,
+                )
+                self.assertEqual(response.status_code, 303)
+
+                response = client.get(
+                    "/files/export.xlsx",
+                    params={"sort_by": "name", "sort_dir": "asc"},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers["content-type"],
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        self.assertIn("attachment", response.headers["content-disposition"])
+        self.assertEqual(
+            _xlsx_sheet_names(response.content),
+            ["总表", "通用知识库", "质量体系部知识库"],
+        )
+
+    def test_files_export_xlsx_for_selected_knowledge_base_groups_root_and_folders(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+
+        settings = build_settings(tmp_path)
+
+        with patch.object(main_module, "settings", settings):
+            with TestClient(app) as client:
+                for doc_id, folder_path, original_filename in (
+                    ("doc-root", "", "根目录文件.pdf"),
+                    ("doc-hr", "制度库/人事", "员工手册.pdf"),
+                    ("doc-quality", "质量体系", "检验规范.pdf"),
+                ):
+                    db.insert_task(
+                        settings,
+                        {
+                            "doc_id": doc_id,
+                            "knowledge_base_code": "general",
+                            "folder_path": folder_path,
+                            "relative_source_path": f"{folder_path + '/' if folder_path else ''}{original_filename}",
+                            "source_archive_name": "",
+                            "original_filename": original_filename,
+                            "stored_pdf_path": str(settings.pdf_store_dir / f"{doc_id}.pdf"),
+                            "stored_pdf_filename": f"{doc_id}.pdf",
+                            "final_md_path": str(settings.output_dir / f"{doc_id}.md"),
+                            "final_md_filename": f"{doc_id}.md",
+                            "upload_time": "2026-01-01T00:00:00+00:00",
+                            "started_at": None,
+                            "completed_at": None,
+                            "processed_time": None,
+                            "process_status": "success",
+                            "error_message": "",
+                            "mineru_task_dir": str(settings.tasks_dir / doc_id),
+                            "log_path": str(settings.tasks_dir / doc_id / "task.log"),
+                            "file_sha256": "",
+                            "notes": "",
+                            "file_size_bytes": 128,
+                            "mineru_backend": settings.mineru_backend,
+                            "mineru_method": settings.mineru_method,
+                            "fastgpt_sync_status": "synced",
+                            "fastgpt_sync_error": "",
+                        },
+                    )
+                response = client.post(
+                    "/login",
+                    data={"username": settings.username, "password": settings.password},
+                    follow_redirects=False,
+                )
+                self.assertEqual(response.status_code, 303)
+
+                response = client.get(
+                    "/files/export.xlsx",
+                    params={"knowledge_base_code": "general", "q": ".pdf"},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            _xlsx_sheet_names(response.content),
+            ["总表", "知识库根目录", "制度库", "质量体系"],
+        )
+
+
+def _xlsx_sheet_names(content: bytes) -> list[str]:
+    with zipfile.ZipFile(io.BytesIO(content)) as workbook:
+        workbook_xml = workbook.read("xl/workbook.xml")
+    root = ET.fromstring(workbook_xml)
+    namespace = {"main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    return [node.attrib["name"] for node in root.findall(".//main:sheet", namespace)]

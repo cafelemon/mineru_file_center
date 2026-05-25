@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% macro render_folder_nodes(nodes, knowledge_base_code, selected_process_status, selected_search_query) %}
+{% macro render_folder_nodes(nodes, knowledge_base_code, selected_process_status, selected_search_query, selected_sort_by, selected_sort_dir) %}
     {% if nodes %}
     <ul class="folder-tree">
         {% for node in nodes %}
@@ -29,6 +29,8 @@
                         {% if selected_search_query %}
                         <input type="hidden" name="q" value="{{ selected_search_query }}">
                         {% endif %}
+                        <input type="hidden" name="sort_by" value="{{ selected_sort_by }}">
+                        <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}">
                         <button type="submit" class="folder-icon-button is-danger" title="删除空目录" aria-label="删除空目录 {{ node.name }}">
                             <span aria-hidden="true">×</span>
                         </button>
@@ -43,10 +45,12 @@
                     {% if selected_search_query %}
                     <input type="hidden" name="q" value="{{ selected_search_query }}">
                     {% endif %}
+                    <input type="hidden" name="sort_by" value="{{ selected_sort_by }}">
+                    <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}">
                     <input type="text" name="new_folder_name" value="{{ node.name }}" maxlength="80" aria-label="新目录名称" required>
                     <button type="submit">保存</button>
                 </form>
-                {{ render_folder_nodes(node.children, knowledge_base_code, selected_process_status, selected_search_query) }}
+                {{ render_folder_nodes(node.children, knowledge_base_code, selected_process_status, selected_search_query, selected_sort_by, selected_sort_dir) }}
             </details>
             {% else %}
             <div class="folder-row">
@@ -70,6 +74,8 @@
                         {% if selected_search_query %}
                         <input type="hidden" name="q" value="{{ selected_search_query }}">
                         {% endif %}
+                        <input type="hidden" name="sort_by" value="{{ selected_sort_by }}">
+                        <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}">
                         <button type="submit" class="folder-icon-button is-danger" title="删除空目录" aria-label="删除空目录 {{ node.name }}">
                             <span aria-hidden="true">×</span>
                         </button>
@@ -85,6 +91,8 @@
                 {% if selected_search_query %}
                 <input type="hidden" name="q" value="{{ selected_search_query }}">
                 {% endif %}
+                <input type="hidden" name="sort_by" value="{{ selected_sort_by }}">
+                <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}">
                 <input type="text" name="new_folder_name" value="{{ node.name }}" maxlength="80" aria-label="新目录名称" required>
                 <button type="submit">保存</button>
             </form>
@@ -157,7 +165,7 @@
                             <span class="folder-name">知识库根目录</span>
                             <small class="folder-count">全部</small>
                         </a>
-                        {{ render_folder_nodes(knowledge_base.folder_tree, knowledge_base.code, selected_process_status, selected_search_query) }}
+                        {{ render_folder_nodes(knowledge_base.folder_tree, knowledge_base.code, selected_process_status, selected_search_query, selected_sort_by, selected_sort_dir) }}
                     </div>
                 </details>
                 {% endfor %}
@@ -184,6 +192,8 @@
                 {% if selected_search_query %}
                 <input type="hidden" name="q" value="{{ selected_search_query }}">
                 {% endif %}
+                <input type="hidden" name="sort_by" value="{{ selected_sort_by }}">
+                <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}">
                 <div class="compact-panel-head">
                     <strong>新建目录</strong>
                     <span>{{ selected_knowledge_base.display_name }}</span>
@@ -261,7 +271,22 @@
                             <span>文件搜索</span>
                             <input type="text" name="q" value="{{ selected_search_query }}" placeholder="搜索文件名、目录或 Markdown">
                         </label>
+                        <label class="toolbar-control sort-control">
+                            <span>排序字段</span>
+                            <select name="sort_by">
+                                <option value="processed_time" {% if selected_sort_by == 'processed_time' %}selected{% endif %}>处理时间</option>
+                                <option value="name" {% if selected_sort_by == 'name' %}selected{% endif %}>文件名</option>
+                            </select>
+                        </label>
+                        <label class="toolbar-control sort-dir-control">
+                            <span>排序方向</span>
+                            <select name="sort_dir">
+                                <option value="desc" {% if selected_sort_dir == 'desc' %}selected{% endif %}>降序</option>
+                                <option value="asc" {% if selected_sort_dir == 'asc' %}selected{% endif %}>升序</option>
+                            </select>
+                        </label>
                         <button type="submit" class="toolbar-button secondary-button">筛选</button>
+                        <a class="toolbar-button export-button" href="{{ export_href }}">导出 Excel</a>
                     </div>
                 </div>
             </form>
@@ -275,6 +300,8 @@
                 {% if selected_search_query %}
                 <input type="hidden" name="q" value="{{ selected_search_query }}">
                 {% endif %}
+                <input type="hidden" name="sort_by" value="{{ selected_sort_by }}">
+                <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}">
                 <span class="selection-counter" data-selection-counter>未选择文件</span>
                 <div class="toolbar-control folder-picker-control" data-folder-picker>
                     <span>目标目录</span>
@@ -310,6 +337,8 @@
             {% if selected_search_query %}
             <input type="hidden" name="q" value="{{ selected_search_query }}">
             {% endif %}
+            <input type="hidden" name="sort_by" value="{{ selected_sort_by }}">
+            <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}">
             <div>
                 <strong>一键删除失败任务</strong>
                 <p>当前筛选范围内共有 {{ failed_file_count }} 个失败文档。请输入登录密码后批量删除。</p>

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+from io import BytesIO
 import logging
 import os
 import secrets
@@ -14,7 +15,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -44,6 +45,10 @@ from .services.file_link_service import (
     FileLinkValidationError,
 )
 from .services.file_commit_service import commit_uploaded_file
+from .services.file_inventory_export_service import (
+    build_file_inventory_workbook,
+    file_inventory_filename,
+)
 from .services.source_storage_service import SourceStoragePlan, SourceStorageService
 
 
@@ -64,6 +69,8 @@ FASTGPT_SYNC_LABELS = {
     "failed": "同步失败",
 }
 FILES_PAGE_SIZE = 20
+FILE_SORT_FIELDS = {"name", "processed_time"}
+FILE_SORT_DIRECTIONS = {"asc", "desc"}
 SUPPORTED_SOURCE_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".xlsm"}
 SOURCE_MIME_TYPES = {
     ".pdf": "application/pdf",
@@ -349,12 +356,16 @@ def build_file_list_redirect_params(
     folder_path: str = "",
     process_status: str = "",
     search_query: str = "",
+    sort_by: str = "",
+    sort_dir: str = "",
 ) -> dict[str, str]:
     params: dict[str, str] = {}
     normalized_knowledge_base_code = str(knowledge_base_code or "").strip()
     normalized_folder_path = normalize_folder_path(folder_path)
     normalized_process_status = str(process_status or "").strip()
     normalized_search_query = str(search_query or "").strip()
+    normalized_sort_by = normalize_file_sort_by(sort_by)
+    normalized_sort_dir = normalize_file_sort_dir(sort_dir)
 
     if normalized_knowledge_base_code:
         params["knowledge_base_code"] = normalized_knowledge_base_code
@@ -364,7 +375,19 @@ def build_file_list_redirect_params(
         params["process_status"] = normalized_process_status
     if normalized_search_query:
         params["q"] = normalized_search_query
+    params["sort_by"] = normalized_sort_by
+    params["sort_dir"] = normalized_sort_dir
     return params
+
+
+def normalize_file_sort_by(raw_value: object) -> str:
+    text = str(raw_value or "").strip()
+    return text if text in FILE_SORT_FIELDS else "processed_time"
+
+
+def normalize_file_sort_dir(raw_value: object) -> str:
+    text = str(raw_value or "").strip().lower()
+    return text if text in FILE_SORT_DIRECTIONS else "desc"
 
 
 def format_bulk_delete_error(failed_items: list[str]) -> str:
@@ -448,6 +471,8 @@ def build_folder_tree(
     selected_folder_path: str,
     selected_process_status: str,
     selected_search_query: str = "",
+    selected_sort_by: str = "processed_time",
+    selected_sort_dir: str = "desc",
 ) -> list[dict[str, object]]:
     nodes: dict[str, dict[str, object]] = {}
     explicit_count_mode = any("file_count" in record for record in records)
@@ -501,6 +526,8 @@ def build_folder_tree(
                 params["process_status"] = selected_process_status
             if selected_search_query:
                 params["q"] = selected_search_query
+            params["sort_by"] = selected_sort_by
+            params["sort_dir"] = selected_sort_dir
             finalized.append(
                 {
                     "name": item["name"],
@@ -564,6 +591,8 @@ def build_knowledge_tree(
     selected_folder_path: str,
     selected_process_status: str,
     selected_search_query: str,
+    selected_sort_by: str,
+    selected_sort_dir: str,
     folder_rows_by_code: dict[str, list[dict[str, object]]],
 ) -> list[dict[str, object]]:
     tree: list[dict[str, object]] = []
@@ -575,12 +604,16 @@ def build_knowledge_tree(
             params["process_status"] = selected_process_status
         if selected_search_query:
             params["q"] = selected_search_query
+        params["sort_by"] = selected_sort_by
+        params["sort_dir"] = selected_sort_dir
         folder_tree = build_folder_tree(
             folder_rows_by_code.get(code, []),
             knowledge_base_code=code,
             selected_folder_path=selected_folder_path if is_active else "",
             selected_process_status=selected_process_status,
             selected_search_query=selected_search_query,
+            selected_sort_by=selected_sort_by,
+            selected_sort_dir=selected_sort_dir,
         )
         tree.append(
             {
@@ -835,6 +868,8 @@ def file_list(
     folder_path: str = "",
     process_status: str = "",
     q: str = "",
+    sort_by: str = "",
+    sort_dir: str = "",
     page: int = 1,
     _: None = Depends(require_login),
 ) -> HTMLResponse:
@@ -849,6 +884,8 @@ def file_list(
     if selected_status not in {"", "queued", "processing", "success", "failed"}:
         selected_status = ""
     selected_search_query = str(q or "").strip()
+    selected_sort_by = normalize_file_sort_by(sort_by)
+    selected_sort_dir = normalize_file_sort_dir(sort_dir)
     folder_records = (
         build_folder_rows_with_counts(knowledge_base_code=selected_knowledge_base_code)
         if selected_knowledge_base_code
@@ -865,6 +902,8 @@ def file_list(
         folder_path=selected_folder_path,
         process_status=selected_status,
         search_query=selected_search_query,
+        sort_by=selected_sort_by,
+        sort_dir=selected_sort_dir,
     )
     total_files = db.count_library_files(
         settings,
@@ -887,6 +926,8 @@ def file_list(
             folder_path=selected_folder_path or None,
             process_status=selected_status or None,
             search_query=selected_search_query or None,
+            sort_by=selected_sort_by,
+            sort_dir=selected_sort_dir,
             limit=FILES_PAGE_SIZE,
             offset=(int(pagination["page"]) - 1) * FILES_PAGE_SIZE,
         )
@@ -960,6 +1001,8 @@ def file_list(
         selected_folder_path=selected_folder_path,
         selected_process_status=selected_status,
         selected_search_query=selected_search_query,
+        selected_sort_by=selected_sort_by,
+        selected_sort_dir=selected_sort_dir,
         folder_rows_by_code=folder_rows_by_code,
     )
     selected_knowledge_tree = next(
@@ -975,6 +1018,9 @@ def file_list(
         all_files_params["process_status"] = selected_status
     if selected_search_query:
         all_files_params["q"] = selected_search_query
+    all_files_params["sort_by"] = selected_sort_by
+    all_files_params["sort_dir"] = selected_sort_dir
+    export_params = dict(base_params)
     return render(
         request,
         "files.html",
@@ -995,6 +1041,8 @@ def file_list(
             "selected_folder_path_display": selected_folder_path or "知识库根目录",
             "selected_process_status": selected_status,
             "selected_search_query": selected_search_query,
+            "selected_sort_by": selected_sort_by,
+            "selected_sort_dir": selected_sort_dir,
             "folder_tree": knowledge_tree,
             "knowledge_tree": knowledge_tree,
             "selected_knowledge_tree": selected_knowledge_tree,
@@ -1002,7 +1050,71 @@ def file_list(
             "pagination": pagination,
             "failed_file_count": failed_file_count,
             "all_files_href": f"/files?{urlencode(all_files_params)}" if all_files_params else "/files",
+            "export_href": f"/files/export.xlsx?{urlencode(export_params)}",
         },
+    )
+
+
+@app.get("/files/export.xlsx")
+def export_file_inventory(
+    knowledge_base_code: str = "",
+    folder_path: str = "",
+    process_status: str = "",
+    q: str = "",
+    sort_by: str = "",
+    sort_dir: str = "",
+    _: None = Depends(require_login),
+) -> StreamingResponse:
+    selected_knowledge_base_code = knowledge_base_code.strip()
+    if selected_knowledge_base_code and not knowledge_base_exists(
+        settings,
+        selected_knowledge_base_code,
+    ):
+        selected_knowledge_base_code = ""
+    selected_folder_path = normalize_folder_path(folder_path if selected_knowledge_base_code else "")
+    selected_status = process_status.strip()
+    if selected_status not in {"", "queued", "processing", "success", "failed"}:
+        selected_status = ""
+    selected_search_query = str(q or "").strip()
+    selected_sort_by = normalize_file_sort_by(sort_by)
+    selected_sort_dir = normalize_file_sort_dir(sort_dir)
+    if selected_knowledge_base_code:
+        available_folder_paths = {
+            normalize_folder_path(item.get("folder_path"))
+            for item in build_folder_rows_with_counts(
+                knowledge_base_code=selected_knowledge_base_code
+            )
+            if item is not None
+        }
+        if selected_folder_path and selected_folder_path not in available_folder_paths:
+            selected_folder_path = ""
+
+    records = enrich_records(
+        db.list_library_files(
+            settings,
+            knowledge_base_code=selected_knowledge_base_code or None,
+            folder_path=selected_folder_path or None,
+            process_status=selected_status or None,
+            search_query=selected_search_query or None,
+            sort_by=selected_sort_by,
+            sort_dir=selected_sort_dir,
+            limit=100000,
+            offset=0,
+        )
+    )
+    workbook_bytes = build_file_inventory_workbook(
+        records,
+        knowledge_bases=list_knowledge_bases(settings),
+        selected_knowledge_base_code=selected_knowledge_base_code,
+    )
+    filename = file_inventory_filename()
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+    }
+    return StreamingResponse(
+        BytesIO(workbook_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
     )
 
 
@@ -1013,6 +1125,8 @@ def create_folder_route(
     folder_name: str = Form(...),
     process_status: str = Form(default=""),
     q: str = Form(default=""),
+    sort_by: str = Form(default=""),
+    sort_dir: str = Form(default=""),
     _: None = Depends(require_login),
 ):
     normalized_knowledge_base_code = knowledge_base_code.strip()
@@ -1022,6 +1136,8 @@ def create_folder_route(
         folder_path=parent_path,
         process_status=process_status,
         search_query=q,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
 
     if not knowledge_base_exists(settings, normalized_knowledge_base_code):
@@ -1062,6 +1178,8 @@ def delete_folder_route(
     folder_path: str = Form(...),
     process_status: str = Form(default=""),
     q: str = Form(default=""),
+    sort_by: str = Form(default=""),
+    sort_dir: str = Form(default=""),
     _: None = Depends(require_login),
 ):
     normalized_knowledge_base_code = knowledge_base_code.strip()
@@ -1073,6 +1191,8 @@ def delete_folder_route(
         folder_path=parent_path,
         process_status=process_status,
         search_query=q,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
 
     if not normalized_folder_path:
@@ -1114,6 +1234,8 @@ def rename_folder_route(
     new_folder_name: str = Form(...),
     process_status: str = Form(default=""),
     q: str = Form(default=""),
+    sort_by: str = Form(default=""),
+    sort_dir: str = Form(default=""),
     _: None = Depends(require_login),
 ):
     normalized_knowledge_base_code = knowledge_base_code.strip()
@@ -1123,6 +1245,8 @@ def rename_folder_route(
         folder_path=normalized_folder_path,
         process_status=process_status,
         search_query=q,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
 
     if not knowledge_base_exists(settings, normalized_knowledge_base_code):
@@ -1176,6 +1300,8 @@ def move_files_route(
     target_folder_path: str = Form(default=""),
     process_status: str = Form(default=""),
     q: str = Form(default=""),
+    sort_by: str = Form(default=""),
+    sort_dir: str = Form(default=""),
     _: None = Depends(require_login),
 ):
     normalized_knowledge_base_code = knowledge_base_code.strip()
@@ -1185,6 +1311,8 @@ def move_files_route(
         folder_path=target_path,
         process_status=process_status,
         search_query=q,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
     if not knowledge_base_exists(settings, normalized_knowledge_base_code):
         return RedirectResponse(
@@ -1385,6 +1513,8 @@ def delete_failed_documents(
     folder_path: str = Form(default=""),
     process_status: str = Form(default=""),
     q: str = Form(default=""),
+    sort_by: str = Form(default=""),
+    sort_dir: str = Form(default=""),
     _: None = Depends(require_login),
 ):
     del request
@@ -1393,6 +1523,8 @@ def delete_failed_documents(
         folder_path=folder_path,
         process_status=process_status,
         search_query=q,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
 
     if not secrets.compare_digest(password, settings.password):
