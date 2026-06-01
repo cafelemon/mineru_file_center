@@ -23,7 +23,7 @@
             <dd><span class="status status-{{ task.process_status }}">{{ task.status_label }}</span></dd>
         </div>
         <div>
-            <dt>FastGPT 同步</dt>
+            <dt>FastGPT/Bridge 同步</dt>
             <dd><span class="status status-fastgpt-{{ task.fastgpt_sync_status }}">{{ task.fastgpt_sync_status_label }}</span></dd>
         </div>
         <div>
@@ -75,7 +75,7 @@
             <dd>{{ task.error_message or "-" }}</dd>
         </div>
         <div class="span-2">
-            <dt>FastGPT 同步错误</dt>
+            <dt>FastGPT/Bridge 同步错误</dt>
             <dd>{{ task.fastgpt_sync_error }}</dd>
         </div>
     </dl>

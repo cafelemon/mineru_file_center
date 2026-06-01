@@ -293,18 +293,24 @@ class MineruTaskRunner:
             fastgpt_dataset_id=sync_result.dataset_id,
             fastgpt_dataset_name=sync_result.dataset_name,
             fastgpt_collection_id=sync_result.collection_id,
-            fastgpt_sync_status="synced",
-            fastgpt_synced_at=_utc_now(),
+            fastgpt_sync_status="pending",
             fastgpt_sync_error="",
             notes=note,
         )
 
         if not self.bridge_registry_sync_service.is_enabled():
+            error_message = "Bridge registry sync skipped: BRIDGE_API_BASE_URL 未配置"
             note = _append_note(
                 note,
-                "Bridge registry sync skipped: BRIDGE_API_BASE_URL 未配置",
+                error_message,
             )
-            db.update_task(self.settings, doc_id, notes=note)
+            db.update_task(
+                self.settings,
+                doc_id,
+                fastgpt_sync_status="failed",
+                fastgpt_sync_error=error_message,
+                notes=note,
+            )
             return
 
         try:
@@ -317,11 +323,24 @@ class MineruTaskRunner:
         except BridgeRegistrySyncError as exc:
             logger.warning("Task %s Bridge registry sync failed: %s", doc_id, exc)
             note = _append_note(note, f"Bridge registry sync failed: {exc}")
-            db.update_task(self.settings, doc_id, notes=note)
+            db.update_task(
+                self.settings,
+                doc_id,
+                fastgpt_sync_status="failed",
+                fastgpt_sync_error=str(exc),
+                notes=note,
+            )
             return
 
         note = _append_note(note, "Bridge registry sync ok")
-        db.update_task(self.settings, doc_id, notes=note)
+        db.update_task(
+            self.settings,
+            doc_id,
+            fastgpt_sync_status="synced",
+            fastgpt_synced_at=_utc_now(),
+            fastgpt_sync_error="",
+            notes=note,
+        )
 
     def sync_task_to_fastgpt(self, doc_id: str) -> None:
         if not self.fastgpt_sync_service.is_enabled():

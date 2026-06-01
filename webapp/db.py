@@ -175,6 +175,23 @@ def _migrate_tasks_schema(connection: sqlite3.Connection) -> None:
         WHERE fastgpt_sync_status IS NULL OR fastgpt_sync_status = ''
         """
     )
+    connection.execute(
+        """
+        UPDATE tasks
+        SET fastgpt_sync_status = 'failed',
+            fastgpt_sync_error = CASE
+                WHEN fastgpt_sync_error IS NULL OR fastgpt_sync_error = ''
+                THEN 'Bridge registry sync did not complete; please retry FastGPT/Bridge sync.'
+                ELSE fastgpt_sync_error
+            END
+        WHERE process_status = 'success'
+          AND fastgpt_sync_status = 'synced'
+          AND (
+              notes LIKE '%Bridge registry sync failed:%'
+              OR notes LIKE '%Bridge registry sync skipped:%'
+          )
+        """
+    )
     rows = connection.execute(
         """
         SELECT doc_id,
@@ -353,6 +370,7 @@ def list_library_files(
     folder_path: str | None = None,
     process_status: str | None = None,
     search_query: str | None = None,
+    fastgpt_sync_status: str | None = None,
     sort_by: str | None = None,
     sort_dir: str | None = None,
     limit: int = 500,
@@ -363,6 +381,7 @@ def list_library_files(
         folder_path=folder_path,
         process_status=process_status,
         search_query=search_query,
+        fastgpt_sync_status=fastgpt_sync_status,
     )
     where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     order_clause = _library_file_order_clause(sort_by=sort_by, sort_dir=sort_dir)
@@ -388,12 +407,14 @@ def count_library_files(
     folder_path: str | None = None,
     process_status: str | list[str] | tuple[str, ...] | None = None,
     search_query: str | None = None,
+    fastgpt_sync_status: str | None = None,
 ) -> int:
     conditions, params = _library_file_conditions(
         knowledge_base_code=knowledge_base_code,
         folder_path=folder_path,
         process_status=process_status,
         search_query=search_query,
+        fastgpt_sync_status=fastgpt_sync_status,
     )
     where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     with closing(_connect(settings)) as connection:
@@ -410,6 +431,7 @@ def _library_file_conditions(
     folder_path: str | None = None,
     process_status: str | list[str] | tuple[str, ...] | None = None,
     search_query: str | None = None,
+    fastgpt_sync_status: str | None = None,
 ) -> tuple[list[str], list[Any]]:
     conditions: list[str] = []
     params: list[Any] = []
@@ -431,6 +453,10 @@ def _library_file_conditions(
         else:
             conditions.append("process_status = ?")
             params.append(process_status)
+    normalized_fastgpt_sync_status = str(fastgpt_sync_status or "").strip()
+    if normalized_fastgpt_sync_status:
+        conditions.append("fastgpt_sync_status = ?")
+        params.append(normalized_fastgpt_sync_status)
     normalized_search_query = str(search_query or "").strip()
     if normalized_search_query:
         pattern = f"%{normalized_search_query}%"

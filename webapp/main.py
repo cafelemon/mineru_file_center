@@ -71,6 +71,7 @@ FASTGPT_SYNC_LABELS = {
 FILES_PAGE_SIZE = 20
 FILE_SORT_FIELDS = {"name", "processed_time"}
 FILE_SORT_DIRECTIONS = {"asc", "desc"}
+BULK_DELETE_SUCCESS_CONFIRM_TEXT = "确认全部删除"
 SUPPORTED_SOURCE_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".xlsm"}
 SOURCE_MIME_TYPES = {
     ".pdf": "application/pdf",
@@ -271,6 +272,15 @@ def enrich_record(record: dict | None) -> dict | None:
         item["fastgpt_sync_status"],
         item["fastgpt_sync_status"] or "-",
     )
+    item["overall_status_label"] = item["status_label"]
+    item["overall_status_class"] = item.get("process_status") or ""
+    if item.get("process_status") == "success":
+        if item["fastgpt_sync_status"] == "failed":
+            item["overall_status_label"] = item["fastgpt_sync_status_label"]
+            item["overall_status_class"] = "failed"
+        elif item["fastgpt_sync_status"] == "pending":
+            item["overall_status_label"] = item["fastgpt_sync_status_label"]
+            item["overall_status_class"] = "queued"
     item["fastgpt_dataset_name"] = item.get("fastgpt_dataset_name") or "-"
     item["fastgpt_collection_id"] = item.get("fastgpt_collection_id") or "-"
     item["fastgpt_synced_at"] = item.get("fastgpt_synced_at") or "-"
@@ -286,13 +296,21 @@ def enrich_records(records: list[dict]) -> list[dict]:
     return [enrich_record(record) for record in records if record is not None]
 
 
+def is_abnormal_record(record: dict) -> bool:
+    process_status = str(record.get("process_status") or "").strip()
+    fastgpt_sync_status = str(record.get("fastgpt_sync_status") or "").strip()
+    return process_status == "failed" or (
+        process_status == "success" and fastgpt_sync_status == "failed"
+    )
+
+
 def build_summary_cards(records: list[dict]) -> list[dict[str, object]]:
     total_count = len(records)
     success_count = sum(1 for item in records if item["process_status"] == "success")
     processing_count = sum(
         1 for item in records if item["process_status"] in {"queued", "processing"}
     )
-    failed_count = sum(1 for item in records if item["process_status"] == "failed")
+    failed_count = sum(1 for item in records if is_abnormal_record(item))
     return [
         {"label": "文件总数", "value": total_count, "tone": "neutral"},
         {"label": "已完成转换", "value": success_count, "tone": "success"},
@@ -390,13 +408,13 @@ def normalize_file_sort_dir(raw_value: object) -> str:
     return text if text in FILE_SORT_DIRECTIONS else "desc"
 
 
-def format_bulk_delete_error(failed_items: list[str]) -> str:
+def format_bulk_delete_error(failed_items: list[str], subject: str = "失败文档") -> str:
     if not failed_items:
         return ""
     preview = "；".join(failed_items[:3])
     if len(failed_items) > 3:
         preview = f"{preview}；另有 {len(failed_items) - 3} 个文档删除失败"
-    return f"以下失败文档删除未完成：{preview}"
+    return f"以下{subject}删除未完成：{preview}"
 
 
 def _is_missing_remote_error(message: str) -> bool:
@@ -947,6 +965,19 @@ def file_list(
             )
         )
     )
+    sync_failed_file_count = (
+        db.count_library_files(
+            settings,
+            knowledge_base_code=selected_knowledge_base_code or None,
+            folder_path=selected_folder_path or None,
+            process_status="success",
+            fastgpt_sync_status="failed",
+            search_query=selected_search_query or None,
+        )
+        if selected_status in {"", "success"}
+        else 0
+    )
+    abnormal_file_count = failed_file_count + sync_failed_file_count
     active_file_count = (
         total_files
         if selected_status in {"queued", "processing"}
@@ -1032,7 +1063,7 @@ def file_list(
                 total_count=total_files,
                 success_count=success_count,
                 processing_count=active_file_count,
-                failed_count=failed_file_count,
+                failed_count=abnormal_file_count,
             ),
             "has_active_tasks": has_active_tasks,
             "selected_knowledge_base_code": selected_knowledge_base_code,
@@ -1049,6 +1080,9 @@ def file_list(
             "folder_options": build_folder_options(folder_records),
             "pagination": pagination,
             "failed_file_count": failed_file_count,
+            "sync_failed_file_count": sync_failed_file_count,
+            "abnormal_file_count": abnormal_file_count,
+            "bulk_delete_success_confirm_text": BULK_DELETE_SUCCESS_CONFIRM_TEXT,
             "all_files_href": f"/files?{urlencode(all_files_params)}" if all_files_params else "/files",
             "export_href": f"/files/export.xlsx?{urlencode(export_params)}",
         },
@@ -1441,7 +1475,7 @@ def retry_fastgpt_sync(
         )
 
     return RedirectResponse(
-        url=f"/files/{doc_id}?{urlencode({'message': 'FastGPT 同步已重试'})}",
+        url=f"/files/{doc_id}?{urlencode({'message': 'FastGPT/Bridge 同步已重试'})}",
         status_code=303,
     )
 
@@ -1540,13 +1574,11 @@ def delete_failed_documents(
         folder_path=normalize_folder_path(folder_path) or None,
         process_status=str(process_status or "").strip() or None,
         search_query=str(q or "").strip() or None,
-        limit=5000,
+        limit=100000,
     )
-    failed_tasks = [
-        task for task in scoped_tasks if str(task.get("process_status") or "").strip() == "failed"
-    ]
-    if not failed_tasks:
-        redirect_params["error"] = "当前筛选范围内没有可删除的失败文档"
+    abnormal_tasks = [task for task in scoped_tasks if is_abnormal_record(task)]
+    if not abnormal_tasks:
+        redirect_params["error"] = "当前筛选范围内没有可删除的异常文档"
         return RedirectResponse(
             url=f"/files?{urlencode(redirect_params)}",
             status_code=303,
@@ -1557,7 +1589,7 @@ def delete_failed_documents(
     deleted_count = 0
     failed_items: list[str] = []
     try:
-        for task in failed_tasks:
+        for task in abnormal_tasks:
             try:
                 delete_document_record(
                     task,
@@ -1573,9 +1605,120 @@ def delete_failed_documents(
         bridge_service.close()
 
     if deleted_count:
-        redirect_params["message"] = f"已删除 {deleted_count} 个失败文档"
+        redirect_params["message"] = f"已删除 {deleted_count} 个异常文档"
     if failed_items:
-        redirect_params["error"] = format_bulk_delete_error(failed_items)
+        redirect_params["error"] = format_bulk_delete_error(failed_items, subject="异常文档")
+    return RedirectResponse(
+        url=f"/files?{urlencode(redirect_params)}",
+        status_code=303,
+    )
+
+
+@app.post("/files/delete-selected")
+def delete_selected_documents(
+    request: Request,
+    doc_ids: list[str] | None = Form(default=None),
+    password: str = Form(...),
+    confirm_text: str = Form(...),
+    knowledge_base_code: str = Form(default=""),
+    folder_path: str = Form(default=""),
+    process_status: str = Form(default=""),
+    q: str = Form(default=""),
+    sort_by: str = Form(default=""),
+    sort_dir: str = Form(default=""),
+    _: None = Depends(require_login),
+):
+    del request
+    redirect_params = build_file_list_redirect_params(
+        knowledge_base_code=knowledge_base_code,
+        folder_path=folder_path,
+        process_status=process_status,
+        search_query=q,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+    )
+
+    if not secrets.compare_digest(password, settings.password):
+        redirect_params["error"] = "删除密码不正确"
+        return RedirectResponse(
+            url=f"/files?{urlencode(redirect_params)}",
+            status_code=303,
+        )
+
+    if str(confirm_text or "").strip() != BULK_DELETE_SUCCESS_CONFIRM_TEXT:
+        redirect_params["error"] = f"确认文本不正确，请输入“{BULK_DELETE_SUCCESS_CONFIRM_TEXT}”"
+        return RedirectResponse(
+            url=f"/files?{urlencode(redirect_params)}",
+            status_code=303,
+        )
+
+    normalized_doc_ids: list[str] = []
+    seen_doc_ids: set[str] = set()
+    for doc_id in doc_ids or []:
+        normalized_doc_id = str(doc_id or "").strip()
+        if not normalized_doc_id or normalized_doc_id in seen_doc_ids:
+            continue
+        normalized_doc_ids.append(normalized_doc_id)
+        seen_doc_ids.add(normalized_doc_id)
+    if not normalized_doc_ids:
+        redirect_params["error"] = "请先选择要删除的文件"
+        return RedirectResponse(
+            url=f"/files?{urlencode(redirect_params)}",
+            status_code=303,
+        )
+
+    selected_tasks: list[dict] = []
+    missing_doc_ids: list[str] = []
+    for doc_id in normalized_doc_ids:
+        task = db.get_task(settings, doc_id)
+        if task is None:
+            missing_doc_ids.append(doc_id)
+            continue
+        selected_tasks.append(task)
+
+    if missing_doc_ids:
+        redirect_params["error"] = "选中文件包含不存在或已删除的文档，请刷新后重试"
+        return RedirectResponse(
+            url=f"/files?{urlencode(redirect_params)}",
+            status_code=303,
+        )
+
+    active_tasks = [
+        task
+        for task in selected_tasks
+        if str(task.get("process_status") or "").strip() not in {"success", "failed"}
+    ]
+    if active_tasks:
+        redirect_params["error"] = "选中文件包含排队中或处理中的文档，请等待任务结束后再删除"
+        return RedirectResponse(
+            url=f"/files?{urlencode(redirect_params)}",
+            status_code=303,
+        )
+
+    fastgpt_service = FastGPTSyncService(settings)
+    bridge_service = BridgeRegistrySyncService(settings)
+    deleted_count = 0
+    failed_items: list[str] = []
+    try:
+        for task in selected_tasks:
+            try:
+                delete_document_record(
+                    task,
+                    fastgpt_service=fastgpt_service,
+                    bridge_service=bridge_service,
+                )
+                deleted_count += 1
+            except DocumentDeleteError as exc:
+                label = str(task.get("original_filename") or task.get("doc_id") or "-").strip()
+                failed_items.append(f"{label}：{exc}")
+    finally:
+        fastgpt_service.close()
+        bridge_service.close()
+
+    if deleted_count:
+        redirect_params["message"] = f"已删除 {deleted_count} 个选中文档"
+    if failed_items:
+        redirect_params["error"] = format_bulk_delete_error(failed_items, subject="选中文档")
     return RedirectResponse(
         url=f"/files?{urlencode(redirect_params)}",
         status_code=303,

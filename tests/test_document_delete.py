@@ -79,6 +79,7 @@ def create_task_record(
     folder_path: str = "制度库/人事",
     relative_source_path: str = "制度库/人事/员工手册.pdf",
     original_filename: str = "员工手册.pdf",
+    fastgpt_sync_status: str | None = None,
 ) -> dict:
     task_dir = settings.tasks_dir / doc_id
     task_dir.mkdir(parents=True, exist_ok=True)
@@ -115,7 +116,8 @@ def create_task_record(
         "file_size_bytes": 128,
         "mineru_backend": settings.mineru_backend,
         "mineru_method": settings.mineru_method,
-        "fastgpt_sync_status": "synced" if collection_id else "pending",
+        "fastgpt_sync_status": fastgpt_sync_status
+        or ("synced" if collection_id else "pending"),
         "fastgpt_sync_error": "",
         "fastgpt_collection_id": collection_id,
     }
@@ -338,7 +340,7 @@ class DocumentDeleteRouteTests(unittest.TestCase):
         self.assertIsNotNone(db.get_task(settings, "doc-6"))
         self.assertTrue(Path(task["stored_pdf_path"]).exists())
 
-    def test_bulk_delete_failed_documents_only_removes_failed_in_current_scope(self):
+    def test_bulk_delete_failed_documents_removes_abnormal_in_current_scope(self):
         tmp_path = Path(self.id().replace(".", "_"))
         if tmp_path.exists():
             shutil.rmtree(tmp_path)
@@ -350,6 +352,12 @@ class DocumentDeleteRouteTests(unittest.TestCase):
         db.init_db(settings)
         create_task_record(settings, doc_id="doc-failed-1", process_status="failed", collection_id="")
         create_task_record(settings, doc_id="doc-failed-2", process_status="failed", collection_id="")
+        create_task_record(
+            settings,
+            doc_id="doc-sync-failed-in-scope",
+            collection_id="col-sync-failed-in-scope",
+            fastgpt_sync_status="failed",
+        )
         create_task_record(settings, doc_id="doc-success", process_status="success", collection_id="")
         create_task_record(
             settings,
@@ -384,8 +392,10 @@ class DocumentDeleteRouteTests(unittest.TestCase):
         self.assertIn("message=", response.headers["location"])
         self.assertIsNone(db.get_task(settings, "doc-failed-1"))
         self.assertIsNone(db.get_task(settings, "doc-failed-2"))
+        self.assertIsNone(db.get_task(settings, "doc-sync-failed-in-scope"))
         self.assertIsNotNone(db.get_task(settings, "doc-success"))
         self.assertIsNotNone(db.get_task(settings, "doc-other-folder"))
+        self.assertIn("col-sync-failed-in-scope", FakeFastGPTService.deleted_ids)
 
     def test_bulk_delete_failed_documents_rejects_wrong_password(self):
         tmp_path = Path(self.id().replace(".", "_"))
@@ -452,3 +462,285 @@ class DocumentDeleteRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         self.assertIn("error=", response.headers["location"])
         self.assertIsNotNone(db.get_task(settings, "doc-success-2"))
+
+    def test_delete_selected_documents_requires_confirm_text(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+
+        settings = build_settings(tmp_path)
+        settings.ensure_directories()
+        db.init_db(settings)
+        create_task_record(settings, doc_id="doc-success-confirm")
+
+        with patch.object(main_module, "settings", settings), patch.object(
+            main_module, "FastGPTSyncService", FakeFastGPTService
+        ), patch.object(main_module, "BridgeRegistrySyncService", FakeBridgeService), patch.object(
+            main_module.db, "mark_incomplete_tasks_as_interrupted", lambda _settings: None
+        ):
+            with TestClient(app) as client:
+                client.post(
+                    "/login",
+                    data={"username": settings.username, "password": settings.password},
+                    follow_redirects=False,
+                )
+                response = client.post(
+                    "/files/delete-selected",
+                    data={
+                        "doc_ids": ["doc-success-confirm"],
+                        "password": settings.password,
+                        "confirm_text": "确认删除",
+                    },
+                    follow_redirects=False,
+                )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("error=", response.headers["location"])
+        self.assertIsNotNone(db.get_task(settings, "doc-success-confirm"))
+        self.assertEqual(FakeFastGPTService.deleted_ids, [])
+        self.assertEqual(FakeBridgeService.calls, [])
+
+    def test_delete_selected_documents_removes_success_and_failed_selection(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+
+        settings = build_settings(tmp_path)
+        settings.ensure_directories()
+        db.init_db(settings)
+        create_task_record(settings, doc_id="doc-success-1", collection_id="col-success-1")
+        create_task_record(
+            settings, doc_id="doc-failed-selected", process_status="failed", collection_id=""
+        )
+        create_task_record(settings, doc_id="doc-success-kept", collection_id="col-kept")
+
+        with patch.object(main_module, "settings", settings), patch.object(
+            main_module, "FastGPTSyncService", FakeFastGPTService
+        ), patch.object(main_module, "BridgeRegistrySyncService", FakeBridgeService):
+            with TestClient(app) as client:
+                client.post(
+                    "/login",
+                    data={"username": settings.username, "password": settings.password},
+                    follow_redirects=False,
+                )
+                response = client.post(
+                    "/files/delete-selected",
+                    data={
+                        "doc_ids": ["doc-success-1", "doc-failed-selected"],
+                        "password": settings.password,
+                        "confirm_text": "确认全部删除",
+                        "knowledge_base_code": "general",
+                        "folder_path": "制度库/人事",
+                    },
+                    follow_redirects=False,
+                )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("message=", response.headers["location"])
+        self.assertIsNone(db.get_task(settings, "doc-success-1"))
+        self.assertIsNone(db.get_task(settings, "doc-failed-selected"))
+        self.assertIsNotNone(db.get_task(settings, "doc-success-kept"))
+        self.assertCountEqual(FakeFastGPTService.deleted_ids, ["col-success-1"])
+        self.assertCountEqual(
+            FakeBridgeService.calls,
+            [("doc-success-1", "col-success-1"), ("doc-failed-selected", None)],
+        )
+
+    def test_delete_selected_documents_rejects_active_status_without_partial_delete(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+
+        settings = build_settings(tmp_path)
+        settings.ensure_directories()
+        db.init_db(settings)
+        create_task_record(settings, doc_id="doc-success-active-check")
+        create_task_record(
+            settings,
+            doc_id="doc-processing-selected",
+            process_status="processing",
+            collection_id="",
+        )
+
+        with patch.object(main_module, "settings", settings), patch.object(
+            main_module, "FastGPTSyncService", FakeFastGPTService
+        ), patch.object(main_module, "BridgeRegistrySyncService", FakeBridgeService), patch.object(
+            main_module.db, "mark_incomplete_tasks_as_interrupted", lambda _settings: None
+        ):
+            with TestClient(app) as client:
+                client.post(
+                    "/login",
+                    data={"username": settings.username, "password": settings.password},
+                    follow_redirects=False,
+                )
+                response = client.post(
+                    "/files/delete-selected",
+                    data={
+                        "doc_ids": ["doc-success-active-check", "doc-processing-selected"],
+                        "password": settings.password,
+                        "confirm_text": "确认全部删除",
+                    },
+                    follow_redirects=False,
+                )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("error=", response.headers["location"])
+        self.assertIsNotNone(db.get_task(settings, "doc-success-active-check"))
+        self.assertIsNotNone(db.get_task(settings, "doc-processing-selected"))
+        self.assertEqual(FakeFastGPTService.deleted_ids, [])
+        self.assertEqual(FakeBridgeService.calls, [])
+
+    def test_delete_selected_documents_reports_when_nothing_selected(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+
+        settings = build_settings(tmp_path)
+        settings.ensure_directories()
+        db.init_db(settings)
+        create_task_record(settings, doc_id="doc-selection-required")
+
+        with patch.object(main_module, "settings", settings), patch.object(
+            main_module, "FastGPTSyncService", FakeFastGPTService
+        ), patch.object(main_module, "BridgeRegistrySyncService", FakeBridgeService), patch.object(
+            main_module.db, "mark_incomplete_tasks_as_interrupted", lambda _settings: None
+        ):
+            with TestClient(app) as client:
+                client.post(
+                    "/login",
+                    data={"username": settings.username, "password": settings.password},
+                    follow_redirects=False,
+                )
+                response = client.post(
+                    "/files/delete-selected",
+                    data={
+                        "password": settings.password,
+                        "confirm_text": "确认全部删除",
+                    },
+                    follow_redirects=False,
+                )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("error=", response.headers["location"])
+        self.assertIsNotNone(db.get_task(settings, "doc-selection-required"))
+
+    def test_files_page_renders_delete_toolbar_and_modals(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+
+        settings = build_settings(tmp_path)
+        settings.ensure_directories()
+        db.init_db(settings)
+        create_task_record(settings, doc_id="doc-page-success")
+        create_task_record(
+            settings,
+            doc_id="doc-page-sync-failed",
+            collection_id="col-page-sync-failed",
+            fastgpt_sync_status="failed",
+        )
+
+        with patch.object(main_module, "settings", settings), patch.object(
+            main_module.db, "mark_incomplete_tasks_as_interrupted", lambda _settings: None
+        ):
+            with TestClient(app) as client:
+                client.post(
+                    "/login",
+                    data={"username": settings.username, "password": settings.password},
+                    follow_redirects=False,
+                )
+                response = client.get("/files", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        self.assertIn("删除选中", html)
+        self.assertIn("一键删除异常文件", html)
+        self.assertIn('data-delete-selected-label="删除选中"', html)
+        self.assertIn('action="/files/delete-selected"', html)
+        self.assertIn('data-delete-modal="selected"', html)
+        self.assertIn('data-delete-modal="failed"', html)
+        self.assertNotIn("批量删除成功文件", html)
+        self.assertNotIn("/files/delete-successful", html)
+
+    def test_files_page_abnormal_card_includes_sync_failed_success_records(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+
+        settings = build_settings(tmp_path)
+        settings.ensure_directories()
+        db.init_db(settings)
+        create_task_record(
+            settings,
+            doc_id="doc-sync-failed",
+            collection_id="col-sync-failed",
+            fastgpt_sync_status="failed",
+        )
+        create_task_record(settings, doc_id="doc-conversion-failed", process_status="failed", collection_id="")
+        create_task_record(settings, doc_id="doc-clean-success", collection_id="col-clean")
+
+        with patch.object(main_module, "settings", settings), patch.object(
+            main_module.db, "mark_incomplete_tasks_as_interrupted", lambda _settings: None
+        ):
+            with TestClient(app) as client:
+                client.post(
+                    "/login",
+                    data={"username": settings.username, "password": settings.password},
+                    follow_redirects=False,
+                )
+                response = client.get("/files", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertRegex(
+            response.text,
+            r"<span>异常文件</span>\s*<strong>2</strong>",
+        )
+
+    def test_tasks_page_uses_overall_status_for_sync_failed_records(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+
+        settings = build_settings(tmp_path)
+        settings.ensure_directories()
+        db.init_db(settings)
+        create_task_record(
+            settings,
+            doc_id="doc-task-sync-failed",
+            collection_id="col-task-sync-failed",
+            fastgpt_sync_status="failed",
+        )
+        create_task_record(settings, doc_id="doc-task-clean", collection_id="col-task-clean")
+
+        with patch.object(main_module, "settings", settings), patch.object(
+            main_module.db, "mark_incomplete_tasks_as_interrupted", lambda _settings: None
+        ):
+            with TestClient(app) as client:
+                client.post(
+                    "/login",
+                    data={"username": settings.username, "password": settings.password},
+                    follow_redirects=False,
+                )
+                response = client.get("/tasks", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("同步失败", response.text)
+        self.assertIn('status status-failed">同步失败</span>', response.text)
+        self.assertRegex(
+            response.text,
+            r"<span>异常文件</span>\s*<strong>1</strong>",
+        )

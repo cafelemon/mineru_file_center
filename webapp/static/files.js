@@ -3,8 +3,14 @@
     const checkboxes = Array.from(document.querySelectorAll("[data-file-checkbox]"));
     const selectAll = document.querySelector("[data-select-all]");
     const moveButton = document.querySelector("[data-move-button]");
+    const deleteSelectedButton = document.querySelector("[data-open-delete-selected]");
+    const deleteFailedButton = document.querySelector("[data-open-delete-failed]");
     const selectionCounter = document.querySelector("[data-selection-counter]");
     const folderPickers = Array.from(document.querySelectorAll("[data-folder-picker]"));
+    const deleteModals = Array.from(document.querySelectorAll("[data-delete-modal]"));
+    const deleteSelectedForm = document.querySelector("[data-delete-selected-form]");
+    const deleteSelectedDocIds = document.querySelector("[data-delete-selected-doc-ids]");
+    const deleteSelectedCount = document.querySelector("[data-delete-selected-count]");
 
     function escapeSelectorValue(value) {
         if (window.CSS && typeof window.CSS.escape === "function") {
@@ -18,6 +24,13 @@
         if (moveButton) {
             moveButton.disabled = selectedCount === 0;
         }
+        if (deleteSelectedButton) {
+            deleteSelectedButton.disabled = selectedCount === 0;
+            const baseLabel = deleteSelectedButton.getAttribute("data-delete-selected-label") || "删除选中";
+            deleteSelectedButton.textContent = selectedCount
+                ? baseLabel + " " + selectedCount + " 个"
+                : baseLabel;
+        }
         if (selectionCounter) {
             selectionCounter.textContent = selectedCount
                 ? "已选择 " + selectedCount + " 个文件"
@@ -27,6 +40,65 @@
             selectAll.checked = selectedCount > 0 && selectedCount === checkboxes.length;
             selectAll.indeterminate = selectedCount > 0 && selectedCount < checkboxes.length;
         }
+    }
+
+    function selectedCheckboxes() {
+        return checkboxes.filter((checkbox) => checkbox.checked);
+    }
+
+    function clearDeleteSelectedDocIds() {
+        if (deleteSelectedDocIds) {
+            deleteSelectedDocIds.textContent = "";
+        }
+    }
+
+    function populateDeleteSelectedForm() {
+        const selected = selectedCheckboxes();
+        clearDeleteSelectedDocIds();
+        if (deleteSelectedCount) {
+            deleteSelectedCount.textContent = String(selected.length);
+        }
+        if (!deleteSelectedDocIds) {
+            return selected.length;
+        }
+        selected.forEach((checkbox) => {
+            const input = document.createElement("input");
+            input.type = "hidden";
+            input.name = "doc_ids";
+            input.value = checkbox.value;
+            deleteSelectedDocIds.appendChild(input);
+        });
+        return selected.length;
+    }
+
+    function openDeleteModal(name) {
+        const modal = document.querySelector('[data-delete-modal="' + name + '"]');
+        if (!modal) {
+            return;
+        }
+        modal.hidden = false;
+        const firstInput = modal.querySelector("input:not([type='hidden'])");
+        if (firstInput) {
+            firstInput.focus();
+        }
+    }
+
+    function closeDeleteModal(modal) {
+        if (!modal) {
+            return;
+        }
+        modal.hidden = true;
+        const form = modal.querySelector("form");
+        if (form) {
+            form.reset();
+        }
+        if (modal.getAttribute("data-delete-modal") === "selected") {
+            clearDeleteSelectedDocIds();
+        }
+    }
+
+    function closeAllDeleteModals() {
+        deleteModals.forEach(closeDeleteModal);
     }
 
     if (selectAll) {
@@ -44,12 +116,52 @@
 
     if (moveForm) {
         moveForm.addEventListener("submit", function (event) {
-            if (!checkboxes.some((checkbox) => checkbox.checked)) {
+            if (!selectedCheckboxes().length) {
                 event.preventDefault();
                 updateSelectionState();
             }
         });
     }
+
+    if (deleteSelectedButton) {
+        deleteSelectedButton.addEventListener("click", function () {
+            if (!selectedCheckboxes().length) {
+                updateSelectionState();
+                return;
+            }
+            populateDeleteSelectedForm();
+            openDeleteModal("selected");
+        });
+    }
+
+    if (deleteFailedButton) {
+        deleteFailedButton.addEventListener("click", function () {
+            openDeleteModal("failed");
+        });
+    }
+
+    if (deleteSelectedForm) {
+        deleteSelectedForm.addEventListener("submit", function (event) {
+            if (!populateDeleteSelectedForm()) {
+                event.preventDefault();
+                closeAllDeleteModals();
+                updateSelectionState();
+            }
+        });
+    }
+
+    deleteModals.forEach((modal) => {
+        modal.addEventListener("click", function (event) {
+            if (event.target === modal) {
+                closeDeleteModal(modal);
+            }
+        });
+        modal.querySelectorAll("[data-modal-close]").forEach((button) => {
+            button.addEventListener("click", function () {
+                closeDeleteModal(modal);
+            });
+        });
+    });
 
     document.querySelectorAll("[data-folder-delete-form]").forEach((form) => {
         form.addEventListener("submit", function (event) {
@@ -151,6 +263,7 @@
         document.querySelectorAll("[data-folder-rename-panel]").forEach((panel) => {
             panel.hidden = true;
         });
+        closeAllDeleteModals();
     });
 
     updateSelectionState();

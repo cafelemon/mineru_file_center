@@ -19,7 +19,7 @@ EXPORT_HEADERS = [
     "上传时间",
     "处理时间",
     "处理状态",
-    "FastGPT 同步状态",
+    "FastGPT/Bridge 同步状态",
     "FastGPT collectionId",
     "来源压缩包",
     "存储模式",

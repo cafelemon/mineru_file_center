@@ -23,7 +23,7 @@
             <dd><span class="status status-{{ file.process_status }}">{{ file.status_label }}</span></dd>
         </div>
         <div>
-            <dt>FastGPT 同步</dt>
+            <dt>FastGPT/Bridge 同步</dt>
             <dd><span class="status status-fastgpt-{{ file.fastgpt_sync_status }}">{{ file.fastgpt_sync_status_label }}</span></dd>
         </div>
         <div>
@@ -79,7 +79,7 @@
             <dd>{{ file.error_message or "-" }}</dd>
         </div>
         <div class="span-2">
-            <dt>FastGPT 同步错误</dt>
+            <dt>FastGPT/Bridge 同步错误</dt>
             <dd>{{ file.fastgpt_sync_error }}</dd>
         </div>
         <div class="span-2">
@@ -104,7 +104,7 @@
         <a class="button-link secondary" href="/files/{{ file.doc_id }}/download/md">下载 Markdown 文件</a>
         {% if file.can_retry_fastgpt_sync %}
         <form method="post" action="/files/{{ file.doc_id }}/retry-fastgpt-sync" class="inline-form">
-            <button type="submit" class="button-link tertiary form-button-link">重试 FastGPT 同步</button>
+            <button type="submit" class="button-link tertiary form-button-link">重试 FastGPT/Bridge 同步</button>
         </form>
         {% endif %}
     </div>

@@ -255,7 +255,7 @@
                 {% if selected_folder_path %}
                 <input type="hidden" name="folder_path" value="{{ selected_folder_path }}">
                 {% endif %}
-                <div class="filter-stack">
+                <div class="files-search-row">
                     <label class="toolbar-control status-control">
                         <span>处理状态</span>
                         <select name="process_status">
@@ -266,89 +266,152 @@
                             <option value="failed" {% if selected_process_status == 'failed' %}selected{% endif %}>处理失败</option>
                         </select>
                     </label>
-                    <div class="files-search-row">
-                        <label class="toolbar-control search-control">
-                            <span>文件搜索</span>
-                            <input type="text" name="q" value="{{ selected_search_query }}" placeholder="搜索文件名、目录或 Markdown">
-                        </label>
-                        <label class="toolbar-control sort-control">
-                            <span>排序字段</span>
-                            <select name="sort_by">
-                                <option value="processed_time" {% if selected_sort_by == 'processed_time' %}selected{% endif %}>处理时间</option>
-                                <option value="name" {% if selected_sort_by == 'name' %}selected{% endif %}>文件名</option>
-                            </select>
-                        </label>
-                        <label class="toolbar-control sort-dir-control">
-                            <span>排序方向</span>
-                            <select name="sort_dir">
-                                <option value="desc" {% if selected_sort_dir == 'desc' %}selected{% endif %}>降序</option>
-                                <option value="asc" {% if selected_sort_dir == 'asc' %}selected{% endif %}>升序</option>
-                            </select>
-                        </label>
-                        <button type="submit" class="toolbar-button secondary-button">筛选</button>
-                        <a class="toolbar-button export-button" href="{{ export_href }}">导出 Excel</a>
-                    </div>
+                    <label class="toolbar-control search-control">
+                        <span>文件搜索</span>
+                        <input type="text" name="q" value="{{ selected_search_query }}" placeholder="搜索文件名、目录或 Markdown">
+                    </label>
+                    <label class="toolbar-control sort-control">
+                        <span>排序字段</span>
+                        <select name="sort_by">
+                            <option value="processed_time" {% if selected_sort_by == 'processed_time' %}selected{% endif %}>处理时间</option>
+                            <option value="name" {% if selected_sort_by == 'name' %}selected{% endif %}>文件名</option>
+                        </select>
+                    </label>
+                    <label class="toolbar-control sort-dir-control">
+                        <span>排序方向</span>
+                        <select name="sort_dir">
+                            <option value="desc" {% if selected_sort_dir == 'desc' %}selected{% endif %}>降序</option>
+                            <option value="asc" {% if selected_sort_dir == 'asc' %}selected{% endif %}>升序</option>
+                        </select>
+                    </label>
+                    <button type="submit" class="toolbar-button secondary-button">筛选</button>
+                    <a class="toolbar-button export-button" href="{{ export_href }}">导出 Excel</a>
                 </div>
             </form>
 
-            {% if selected_knowledge_base and files %}
-            <form id="filesMoveForm" method="post" action="/files/move" class="files-bulk-form" data-files-move-form>
-                <input type="hidden" name="knowledge_base_code" value="{{ selected_knowledge_base.code }}">
-                {% if selected_process_status %}
-                <input type="hidden" name="process_status" value="{{ selected_process_status }}">
-                {% endif %}
-                {% if selected_search_query %}
-                <input type="hidden" name="q" value="{{ selected_search_query }}">
-                {% endif %}
-                <input type="hidden" name="sort_by" value="{{ selected_sort_by }}">
-                <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}">
+            {% if files %}
+            <div class="files-workbench-row">
                 <span class="selection-counter" data-selection-counter>未选择文件</span>
-                <div class="toolbar-control folder-picker-control" data-folder-picker>
-                    <span>目标目录</span>
-                    <input type="hidden" name="target_folder_path" value="{{ selected_folder_path }}" data-folder-picker-input>
-                    <button type="button" class="folder-picker-trigger" data-folder-picker-trigger aria-expanded="false">
-                        <span data-folder-picker-label>{{ selected_folder_path_display }}</span>
-                    </button>
-                    <div class="folder-picker-menu" data-folder-picker-menu hidden>
-                        <button type="button" class="folder-picker-option is-root {% if not selected_folder_path %}is-selected{% endif %}" data-folder-choice data-folder-path="" data-folder-label="知识库根目录">
-                            知识库根目录
+                {% if selected_knowledge_base %}
+                <form id="filesMoveForm" method="post" action="/files/move" class="files-move-controls" data-files-move-form>
+                    <input type="hidden" name="knowledge_base_code" value="{{ selected_knowledge_base.code }}">
+                    {% if selected_process_status %}
+                    <input type="hidden" name="process_status" value="{{ selected_process_status }}">
+                    {% endif %}
+                    {% if selected_search_query %}
+                    <input type="hidden" name="q" value="{{ selected_search_query }}">
+                    {% endif %}
+                    <input type="hidden" name="sort_by" value="{{ selected_sort_by }}">
+                    <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}">
+                    <div class="toolbar-control folder-picker-control" data-folder-picker>
+                        <span>目标目录</span>
+                        <input type="hidden" name="target_folder_path" value="{{ selected_folder_path }}" data-folder-picker-input>
+                        <button type="button" class="folder-picker-trigger" data-folder-picker-trigger aria-expanded="false">
+                            <span data-folder-picker-label>{{ selected_folder_path_display }}</span>
                         </button>
-                        {% if selected_knowledge_tree %}
-                        {{ render_folder_picker_nodes(selected_knowledge_tree.folder_tree) }}
-                        {% endif %}
+                        <div class="folder-picker-menu" data-folder-picker-menu hidden>
+                            <button type="button" class="folder-picker-option is-root {% if not selected_folder_path %}is-selected{% endif %}" data-folder-choice data-folder-path="" data-folder-label="知识库根目录">
+                                知识库根目录
+                            </button>
+                            {% if selected_knowledge_tree %}
+                            {{ render_folder_picker_nodes(selected_knowledge_tree.folder_tree) }}
+                            {% endif %}
+                        </div>
                     </div>
+                    <button type="submit" class="toolbar-button" data-move-button disabled>移动选中文件</button>
+                </form>
+                {% endif %}
+                <div class="files-bulk-actions">
+                    <button type="button" class="toolbar-button danger-toolbar-button" data-open-delete-selected data-delete-selected-label="删除选中" disabled>删除选中</button>
+                    {% if abnormal_file_count %}
+                    <button type="button" class="toolbar-button danger-ghost-button" data-open-delete-failed>一键删除异常文件</button>
+                    {% endif %}
                 </div>
-                <button type="submit" class="toolbar-button" data-move-button disabled>移动选中文件</button>
-            </form>
+            </div>
             {% endif %}
         </div>
 
-        {% if failed_file_count %}
-        <form method="post" action="/files/delete-failed" class="filter-bar bulk-delete-bar delete-form">
-            {% if selected_knowledge_base_code %}
-            <input type="hidden" name="knowledge_base_code" value="{{ selected_knowledge_base_code }}">
-            {% endif %}
-            {% if selected_folder_path %}
-            <input type="hidden" name="folder_path" value="{{ selected_folder_path }}">
-            {% endif %}
-            {% if selected_process_status %}
-            <input type="hidden" name="process_status" value="{{ selected_process_status }}">
-            {% endif %}
-            {% if selected_search_query %}
-            <input type="hidden" name="q" value="{{ selected_search_query }}">
-            {% endif %}
-            <input type="hidden" name="sort_by" value="{{ selected_sort_by }}">
-            <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}">
-            <div>
-                <strong>一键删除失败任务</strong>
-                <p>当前筛选范围内共有 {{ failed_file_count }} 个失败文档。请输入登录密码后批量删除。</p>
-            </div>
-            <label>
-                <span>确认密码</span>
-                <input type="password" name="password" autocomplete="current-password" required>
-            </label>
-            <button type="submit" class="danger-button">删除当前失败文档</button>
-        </form>
+        {% if files %}
+        <div class="delete-modal" data-delete-modal="selected" hidden>
+            <section class="delete-dialog" role="dialog" aria-modal="true" aria-labelledby="deleteSelectedTitle">
+                <div class="delete-dialog-head">
+                    <div>
+                        <span class="section-kicker">危险操作</span>
+                        <h3 id="deleteSelectedTitle">删除选中文件</h3>
+                    </div>
+                    <button type="button" class="modal-close-button" data-modal-close aria-label="关闭">×</button>
+                </div>
+                <form method="post" action="/files/delete-selected" class="delete-modal-form" data-delete-selected-form>
+                    {% if selected_knowledge_base_code %}
+                    <input type="hidden" name="knowledge_base_code" value="{{ selected_knowledge_base_code }}">
+                    {% endif %}
+                    {% if selected_folder_path %}
+                    <input type="hidden" name="folder_path" value="{{ selected_folder_path }}">
+                    {% endif %}
+                    {% if selected_process_status %}
+                    <input type="hidden" name="process_status" value="{{ selected_process_status }}">
+                    {% endif %}
+                    {% if selected_search_query %}
+                    <input type="hidden" name="q" value="{{ selected_search_query }}">
+                    {% endif %}
+                    <input type="hidden" name="sort_by" value="{{ selected_sort_by }}">
+                    <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}">
+                    <div data-delete-selected-doc-ids></div>
+                    <p class="modal-help">将删除当前页已选中的 <strong data-delete-selected-count>0</strong> 个文件；仅支持成功或失败状态，包含排队中/处理中会整批拒绝。</p>
+                    <label>
+                        <span>确认密码</span>
+                        <input type="password" name="password" autocomplete="current-password" required>
+                    </label>
+                    <label>
+                        <span>确认文本</span>
+                        <input type="text" name="confirm_text" placeholder="{{ bulk_delete_success_confirm_text }}" autocomplete="off" required>
+                    </label>
+                    <div class="modal-actions">
+                        <button type="button" class="toolbar-button secondary-button" data-modal-close>取消</button>
+                        <button type="submit" class="toolbar-button danger-toolbar-button">确认删除</button>
+                    </div>
+                </form>
+            </section>
+        </div>
+        {% endif %}
+
+        {% if abnormal_file_count %}
+        <div class="delete-modal" data-delete-modal="failed" hidden>
+            <section class="delete-dialog" role="dialog" aria-modal="true" aria-labelledby="deleteAbnormalTitle">
+                <div class="delete-dialog-head">
+                    <div>
+                        <span class="section-kicker">危险操作</span>
+                        <h3 id="deleteAbnormalTitle">一键删除异常文件</h3>
+                    </div>
+                    <button type="button" class="modal-close-button" data-modal-close aria-label="关闭">×</button>
+                </div>
+                <form method="post" action="/files/delete-failed" class="delete-modal-form">
+                    {% if selected_knowledge_base_code %}
+                    <input type="hidden" name="knowledge_base_code" value="{{ selected_knowledge_base_code }}">
+                    {% endif %}
+                    {% if selected_folder_path %}
+                    <input type="hidden" name="folder_path" value="{{ selected_folder_path }}">
+                    {% endif %}
+                    {% if selected_process_status %}
+                    <input type="hidden" name="process_status" value="{{ selected_process_status }}">
+                    {% endif %}
+                    {% if selected_search_query %}
+                    <input type="hidden" name="q" value="{{ selected_search_query }}">
+                    {% endif %}
+                    <input type="hidden" name="sort_by" value="{{ selected_sort_by }}">
+                    <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}">
+                    <p class="modal-help">当前筛选范围内共有 <strong>{{ abnormal_file_count }}</strong> 个异常文档，包含处理失败和 FastGPT/Bridge 同步失败。请输入登录密码后删除。</p>
+                    <label>
+                        <span>确认密码</span>
+                        <input type="password" name="password" autocomplete="current-password" required>
+                    </label>
+                    <div class="modal-actions">
+                        <button type="button" class="toolbar-button secondary-button" data-modal-close>取消</button>
+                        <button type="submit" class="toolbar-button danger-toolbar-button">确认删除</button>
+                    </div>
+                </form>
+            </section>
+        </div>
         {% endif %}
 
         {% if files %}
@@ -356,11 +419,9 @@
             <table class="data-table files-data-table">
                 <thead>
                     <tr>
-                        {% if selected_knowledge_base %}
                         <th class="select-col">
                             <input type="checkbox" data-select-all aria-label="选择当前页全部文件">
                         </th>
-                        {% endif %}
                         <th class="col-kb">所属知识库</th>
                         <th class="col-folder">子目录</th>
                         <th class="col-source">原始文件名</th>
@@ -373,11 +434,9 @@
                 <tbody>
                     {% for file in files %}
                     <tr>
-                        {% if selected_knowledge_base %}
                         <td class="select-col">
-                            <input type="checkbox" name="doc_ids" value="{{ file.doc_id }}" form="filesMoveForm" data-file-checkbox aria-label="选择 {{ file.original_filename }}">
+                            <input type="checkbox" name="doc_ids" value="{{ file.doc_id }}" {% if selected_knowledge_base %}form="filesMoveForm"{% endif %} data-file-checkbox data-file-status="{{ file.process_status }}" aria-label="选择 {{ file.original_filename }}">
                         </td>
-                        {% endif %}
                         <td class="col-kb">
                             <div class="table-main truncate-line" title="{{ file.knowledge_base_name }}">{{ file.knowledge_base_name }}</div>
                             <div class="table-sub"><code>{{ file.doc_id }}</code></div>
@@ -390,10 +449,10 @@
                         </td>
                         <td class="col-md">
                             <div class="table-main truncate-line" title="{{ file.final_md_filename }}">{{ file.final_md_filename }}</div>
-                            <div class="table-sub">FastGPT：{{ file.fastgpt_sync_status_label }}</div>
+                            <div class="table-sub">FastGPT/Bridge：{{ file.fastgpt_sync_status_label }}</div>
                         </td>
                         <td class="col-time">{{ file.processed_date }}</td>
-                        <td class="col-status"><span class="status status-{{ file.process_status }}">{{ file.status_label }}</span></td>
+                        <td class="col-status"><span class="status status-{{ file.overall_status_class }}">{{ file.overall_status_label }}</span></td>
                         <td class="col-action"><a class="text-link" href="/files/{{ file.doc_id }}">详情</a></td>
                     </tr>
                     {% endfor %}
