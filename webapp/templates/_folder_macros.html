@@ -1,0 +1,138 @@
+{% macro render_folder_nodes(nodes, knowledge_base_code, selected_process_status, selected_search_query, selected_sort_by, selected_sort_dir, selected_page_size, selected_page) %}
+    {% if nodes %}
+    <ul class="folder-tree">
+        {% for node in nodes %}
+        <li class="folder-tree-item">
+            {% if node.children %}
+            <details class="folder-node" {% if node.is_expanded %}open{% endif %}>
+                <summary class="folder-node-summary">
+                    <a class="folder-item folder-link {% if node.is_active %}is-active{% endif %}" href="{{ node.href }}" title="{{ node.path }}">
+                        <span class="folder-name">{{ node.name }}</span>
+                        <small class="folder-count">{{ node.count }}</small>
+                    </a>
+                </summary>
+                <div class="folder-actions folder-node-actions" aria-label="{{ node.name }} 目录操作">
+                    <a class="folder-icon-button" href="{{ node.href }}#create-folder" title="新建下级目录" aria-label="在 {{ node.name }} 下新建目录">
+                        <span aria-hidden="true">+</span>
+                    </a>
+                    <button type="button" class="folder-icon-button" data-folder-rename-toggle data-folder-path="{{ node.path }}" title="重命名目录" aria-label="重命名目录 {{ node.name }}">
+                        <span aria-hidden="true">改</span>
+                    </button>
+                    <form method="post" action="/folders/delete" class="folder-delete-form" data-folder-delete-form data-folder-path="{{ node.path }}">
+                        <input type="hidden" name="knowledge_base_code" value="{{ knowledge_base_code }}">
+                        <input type="hidden" name="folder_path" value="{{ node.path }}">
+                        {% if selected_process_status %}
+                        <input type="hidden" name="process_status" value="{{ selected_process_status }}">
+                        {% endif %}
+                        {% if selected_search_query %}
+                        <input type="hidden" name="q" value="{{ selected_search_query }}">
+                        {% endif %}
+                        <input type="hidden" name="sort_by" value="{{ selected_sort_by }}">
+                        <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}">
+                        <input type="hidden" name="page_size" value="{{ selected_page_size }}">
+                        <input type="hidden" name="page" value="{{ selected_page }}">
+                        <button type="submit" class="folder-icon-button is-danger" title="删除空目录" aria-label="删除空目录 {{ node.name }}">
+                            <span aria-hidden="true">×</span>
+                        </button>
+                    </form>
+                </div>
+                <form method="post" action="/folders/rename" class="folder-rename-panel" data-folder-rename-panel data-folder-path="{{ node.path }}" hidden>
+                    <input type="hidden" name="knowledge_base_code" value="{{ knowledge_base_code }}">
+                    <input type="hidden" name="folder_path" value="{{ node.path }}">
+                    {% if selected_process_status %}
+                    <input type="hidden" name="process_status" value="{{ selected_process_status }}">
+                    {% endif %}
+                    {% if selected_search_query %}
+                    <input type="hidden" name="q" value="{{ selected_search_query }}">
+                    {% endif %}
+                <input type="hidden" name="sort_by" value="{{ selected_sort_by }}">
+                <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}">
+                <input type="hidden" name="page_size" value="{{ selected_page_size }}">
+                <input type="hidden" name="page" value="{{ selected_page }}">
+                <input type="text" name="new_folder_name" value="{{ node.name }}" maxlength="80" aria-label="新目录名称" required>
+                <button type="submit">保存</button>
+            </form>
+                {{ render_folder_nodes(node.children, knowledge_base_code, selected_process_status, selected_search_query, selected_sort_by, selected_sort_dir, selected_page_size, selected_page) }}
+            </details>
+            {% else %}
+            <div class="folder-row">
+                <a class="folder-item folder-link {% if node.is_active %}is-active{% endif %}" href="{{ node.href }}" title="{{ node.path }}">
+                    <span class="folder-name">{{ node.name }}</span>
+                    <small class="folder-count">{{ node.count }}</small>
+                </a>
+                <span class="folder-actions" aria-label="{{ node.name }} 目录操作">
+                    <a class="folder-icon-button" href="{{ node.href }}#create-folder" title="新建下级目录" aria-label="在 {{ node.name }} 下新建目录">
+                        <span aria-hidden="true">+</span>
+                    </a>
+                    <button type="button" class="folder-icon-button" data-folder-rename-toggle data-folder-path="{{ node.path }}" title="重命名目录" aria-label="重命名目录 {{ node.name }}">
+                        <span aria-hidden="true">改</span>
+                    </button>
+                    <form method="post" action="/folders/delete" class="folder-delete-form" data-folder-delete-form data-folder-path="{{ node.path }}">
+                        <input type="hidden" name="knowledge_base_code" value="{{ knowledge_base_code }}">
+                        <input type="hidden" name="folder_path" value="{{ node.path }}">
+                        {% if selected_process_status %}
+                        <input type="hidden" name="process_status" value="{{ selected_process_status }}">
+                        {% endif %}
+                        {% if selected_search_query %}
+                        <input type="hidden" name="q" value="{{ selected_search_query }}">
+                        {% endif %}
+                        <input type="hidden" name="sort_by" value="{{ selected_sort_by }}">
+                        <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}">
+                        <input type="hidden" name="page_size" value="{{ selected_page_size }}">
+                        <input type="hidden" name="page" value="{{ selected_page }}">
+                        <button type="submit" class="folder-icon-button is-danger" title="删除空目录" aria-label="删除空目录 {{ node.name }}">
+                            <span aria-hidden="true">×</span>
+                        </button>
+                    </form>
+                </span>
+            </div>
+            <form method="post" action="/folders/rename" class="folder-rename-panel" data-folder-rename-panel data-folder-path="{{ node.path }}" hidden>
+                <input type="hidden" name="knowledge_base_code" value="{{ knowledge_base_code }}">
+                <input type="hidden" name="folder_path" value="{{ node.path }}">
+                {% if selected_process_status %}
+                <input type="hidden" name="process_status" value="{{ selected_process_status }}">
+                {% endif %}
+                {% if selected_search_query %}
+                <input type="hidden" name="q" value="{{ selected_search_query }}">
+                {% endif %}
+                <input type="hidden" name="sort_by" value="{{ selected_sort_by }}">
+                <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}">
+                <input type="hidden" name="page_size" value="{{ selected_page_size }}">
+                <input type="hidden" name="page" value="{{ selected_page }}">
+                <input type="text" name="new_folder_name" value="{{ node.name }}" maxlength="80" aria-label="新目录名称" required>
+                <button type="submit">保存</button>
+            </form>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+{% endmacro %}
+
+{% macro render_folder_picker_nodes(nodes) %}
+    {% if nodes %}
+    <ul class="folder-picker-tree">
+        {% for node in nodes %}
+        <li>
+            {% if node.children %}
+            <details class="folder-picker-node" {% if node.is_expanded %}open{% endif %}>
+                <summary>
+                    <span class="folder-picker-name" title="{{ node.path }}">{{ node.name }}</span>
+                    <small>{{ node.count }}</small>
+                </summary>
+                <button type="button" class="folder-picker-option {% if node.is_active %}is-selected{% endif %}" data-folder-choice data-folder-path="{{ node.path }}" data-folder-label="{{ node.path }}">
+                    选定此目录
+                </button>
+                {{ render_folder_picker_nodes(node.children) }}
+            </details>
+            {% else %}
+            <button type="button" class="folder-picker-option {% if node.is_active %}is-selected{% endif %}" data-folder-choice data-folder-path="{{ node.path }}" data-folder-label="{{ node.path }}" title="{{ node.path }}">
+                <span>{{ node.name }}</span>
+                <small>{{ node.count }}</small>
+            </button>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+{% endmacro %}

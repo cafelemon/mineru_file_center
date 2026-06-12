@@ -69,6 +69,7 @@ FASTGPT_SYNC_LABELS = {
     "failed": "同步失败",
 }
 FILES_PAGE_SIZE = 20
+FILES_PAGE_SIZE_OPTIONS = (20, 50, 100, 200, 500)
 FILE_SORT_FIELDS = {"name", "processed_time"}
 FILE_SORT_DIRECTIONS = {"asc", "desc"}
 BULK_DELETE_SUCCESS_CONFIRM_TEXT = "确认全部删除"
@@ -376,6 +377,8 @@ def build_file_list_redirect_params(
     search_query: str = "",
     sort_by: str = "",
     sort_dir: str = "",
+    page_size: object = FILES_PAGE_SIZE,
+    page: object = "",
 ) -> dict[str, str]:
     params: dict[str, str] = {}
     normalized_knowledge_base_code = str(knowledge_base_code or "").strip()
@@ -384,6 +387,8 @@ def build_file_list_redirect_params(
     normalized_search_query = str(search_query or "").strip()
     normalized_sort_by = normalize_file_sort_by(sort_by)
     normalized_sort_dir = normalize_file_sort_dir(sort_dir)
+    normalized_page_size = normalize_files_page_size(page_size)
+    normalized_page = normalize_files_page(page)
 
     if normalized_knowledge_base_code:
         params["knowledge_base_code"] = normalized_knowledge_base_code
@@ -395,7 +400,65 @@ def build_file_list_redirect_params(
         params["q"] = normalized_search_query
     params["sort_by"] = normalized_sort_by
     params["sort_dir"] = normalized_sort_dir
+    params["page_size"] = str(normalized_page_size)
+    if normalized_page > 1:
+        params["page"] = str(normalized_page)
     return params
+
+
+def normalize_files_page(raw_value: object) -> int:
+    try:
+        value = int(str(raw_value or "").strip())
+    except (TypeError, ValueError):
+        return 1
+    return max(1, value)
+
+
+def build_preserved_file_list_params(
+    *,
+    task: dict | None = None,
+    knowledge_base_code: str = "",
+    folder_path: str = "",
+    process_status: str = "",
+    search_query: str = "",
+    sort_by: str = "",
+    sort_dir: str = "",
+    page_size: object = "",
+    page: object = "",
+) -> dict[str, str]:
+    has_list_context = any(
+        str(value or "").strip()
+        for value in (
+            knowledge_base_code,
+            folder_path,
+            process_status,
+            search_query,
+            sort_by,
+            sort_dir,
+        )
+    )
+    if has_list_context:
+        params = build_file_list_redirect_params(
+            knowledge_base_code=knowledge_base_code,
+            folder_path=folder_path,
+            process_status=process_status,
+            search_query=search_query,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page_size=page_size or FILES_PAGE_SIZE,
+            page=page,
+        )
+    else:
+        params = build_file_list_redirect_params(
+            knowledge_base_code=str((task or {}).get("knowledge_base_code") or "").strip(),
+            folder_path=normalize_folder_path((task or {}).get("folder_path")),
+            page_size=FILES_PAGE_SIZE,
+        )
+    return params
+
+
+def append_query_params(path: str, params: dict[str, str]) -> str:
+    return f"{path}?{urlencode(params)}" if params else path
 
 
 def normalize_file_sort_by(raw_value: object) -> str:
@@ -406,6 +469,14 @@ def normalize_file_sort_by(raw_value: object) -> str:
 def normalize_file_sort_dir(raw_value: object) -> str:
     text = str(raw_value or "").strip().lower()
     return text if text in FILE_SORT_DIRECTIONS else "desc"
+
+
+def normalize_files_page_size(raw_value: object) -> int:
+    try:
+        value = int(str(raw_value or "").strip())
+    except (TypeError, ValueError):
+        return FILES_PAGE_SIZE
+    return value if value in FILES_PAGE_SIZE_OPTIONS else FILES_PAGE_SIZE
 
 
 def format_bulk_delete_error(failed_items: list[str], subject: str = "失败文档") -> str:
@@ -451,6 +522,16 @@ def normalize_relative_source_path(raw_value: object) -> str:
     return "/".join(part for part in text.split("/") if part and part != ".")
 
 
+def prefix_relative_source_path(folder_path: str, relative_source_path: str) -> str:
+    normalized_folder_path = normalize_folder_path(folder_path)
+    normalized_relative_path = normalize_relative_source_path(relative_source_path)
+    if not normalized_folder_path:
+        return normalized_relative_path
+    if not normalized_relative_path:
+        return normalized_folder_path
+    return normalize_relative_source_path(f"{normalized_folder_path}/{normalized_relative_path}")
+
+
 def normalize_source_extension(raw_value: object) -> str:
     suffix = Path(str(raw_value or "")).suffix.lower()
     return suffix if suffix in SUPPORTED_SOURCE_EXTENSIONS else ""
@@ -491,6 +572,7 @@ def build_folder_tree(
     selected_search_query: str = "",
     selected_sort_by: str = "processed_time",
     selected_sort_dir: str = "desc",
+    selected_page_size: int = FILES_PAGE_SIZE,
 ) -> list[dict[str, object]]:
     nodes: dict[str, dict[str, object]] = {}
     explicit_count_mode = any("file_count" in record for record in records)
@@ -546,6 +628,7 @@ def build_folder_tree(
                 params["q"] = selected_search_query
             params["sort_by"] = selected_sort_by
             params["sort_dir"] = selected_sort_dir
+            params["page_size"] = str(normalize_files_page_size(selected_page_size))
             finalized.append(
                 {
                     "name": item["name"],
@@ -605,13 +688,14 @@ def build_folder_options(folder_rows: list[dict[str, object]]) -> list[dict[str,
 def build_knowledge_tree(
     *,
     knowledge_bases: list[dict],
+    folder_rows_by_code: dict[str, list[dict[str, object]]],
     selected_knowledge_base_code: str,
     selected_folder_path: str,
     selected_process_status: str,
     selected_search_query: str,
     selected_sort_by: str,
     selected_sort_dir: str,
-    folder_rows_by_code: dict[str, list[dict[str, object]]],
+    selected_page_size: int = FILES_PAGE_SIZE,
 ) -> list[dict[str, object]]:
     tree: list[dict[str, object]] = []
     for knowledge_base in knowledge_bases:
@@ -624,6 +708,7 @@ def build_knowledge_tree(
             params["q"] = selected_search_query
         params["sort_by"] = selected_sort_by
         params["sort_dir"] = selected_sort_dir
+        params["page_size"] = str(normalize_files_page_size(selected_page_size))
         folder_tree = build_folder_tree(
             folder_rows_by_code.get(code, []),
             knowledge_base_code=code,
@@ -632,6 +717,7 @@ def build_knowledge_tree(
             selected_search_query=selected_search_query,
             selected_sort_by=selected_sort_by,
             selected_sort_dir=selected_sort_dir,
+            selected_page_size=selected_page_size,
         )
         tree.append(
             {
@@ -703,9 +789,35 @@ def healthz() -> dict[str, str]:
 
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request) -> HTMLResponse:
+def dashboard(
+    request: Request,
+    knowledge_base_code: str = "",
+    folder_path: str = "",
+) -> HTMLResponse:
     if not is_authenticated(request):
         return RedirectResponse(url="/login", status_code=303)
+
+    knowledge_bases = list_knowledge_bases(settings)
+    selected_knowledge_base_code = knowledge_base_code.strip() or get_default_knowledge_base_code(settings)
+    if selected_knowledge_base_code and not knowledge_base_exists(
+        settings,
+        selected_knowledge_base_code,
+    ):
+        selected_knowledge_base_code = get_default_knowledge_base_code(settings)
+    selected_upload_folder_path = normalize_folder_path(folder_path)
+    upload_folder_rows_by_code = {
+        str(knowledge_base["code"]): build_folder_rows_with_counts(
+            knowledge_base_code=str(knowledge_base["code"])
+        )
+        for knowledge_base in knowledge_bases
+    }
+    if selected_knowledge_base_code:
+        available_upload_folder_paths = {
+            normalize_folder_path(item.get("folder_path"))
+            for item in upload_folder_rows_by_code.get(selected_knowledge_base_code, [])
+        }
+        if selected_upload_folder_path and selected_upload_folder_path not in available_upload_folder_paths:
+            selected_upload_folder_path = ""
 
     recent_tasks = enrich_records(db.list_tasks(settings, limit=20))
     all_tasks = enrich_records(db.list_tasks(settings, limit=500))
@@ -722,7 +834,25 @@ def dashboard(request: Request) -> HTMLResponse:
             "summary_cards": build_summary_cards(all_tasks),
             "has_active_tasks": has_active_tasks,
             "max_upload_size_mb": settings.max_upload_size_mb,
-            "selected_knowledge_base_code": get_default_knowledge_base_code(settings),
+            "knowledge_bases": knowledge_bases,
+            "selected_knowledge_base_code": selected_knowledge_base_code,
+            "selected_folder_path": selected_upload_folder_path,
+            "selected_folder_path_display": selected_upload_folder_path or "知识库根目录",
+            "upload_folder_tree_by_code": {
+                str(knowledge_base["code"]): build_folder_tree(
+                    upload_folder_rows_by_code.get(str(knowledge_base["code"]), []),
+                    knowledge_base_code=str(knowledge_base["code"]),
+                    selected_folder_path=selected_upload_folder_path
+                    if str(knowledge_base["code"]) == selected_knowledge_base_code
+                    else "",
+                    selected_process_status="",
+                    selected_search_query="",
+                    selected_sort_by="processed_time",
+                    selected_sort_dir="desc",
+                    selected_page_size=FILES_PAGE_SIZE,
+                )
+                for knowledge_base in knowledge_bases
+            },
         },
     )
 
@@ -770,6 +900,7 @@ def logout(request: Request):
 async def upload_files(
     request: Request,
     knowledge_base_code: str = Form(...),
+    folder_path: str = Form(default=""),
     files: list[UploadFile] = File(...),
     _: None = Depends(require_login),
 ):
@@ -784,6 +915,16 @@ async def upload_files(
             status_code=303,
         )
     knowledge_base = get_knowledge_base(settings, selected_knowledge_base_code)
+    selected_folder_path = normalize_folder_path(folder_path)
+    if selected_folder_path and not db.folder_exists(
+        settings,
+        selected_knowledge_base_code,
+        selected_folder_path,
+    ):
+        return RedirectResponse(
+            url=f"/?{urlencode({'knowledge_base_code': selected_knowledge_base_code, 'folder_path': selected_folder_path, 'error': '请选择有效的目标目录'})}",
+            status_code=303,
+        )
     runner: MineruTaskRunner = app.state.task_runner
 
     for upload in files:
@@ -798,7 +939,10 @@ async def upload_files(
                     upload=upload,
                     knowledge_base_code=knowledge_base.code,
                     original_name=original_name,
-                    relative_source_path=original_name,
+                    relative_source_path=prefix_relative_source_path(
+                        selected_folder_path,
+                        original_name,
+                    ),
                     source_archive_name="",
                     runner=runner,
                 )
@@ -808,6 +952,7 @@ async def upload_files(
                 zip_doc_ids, zip_errors = await archive_uploaded_zip(
                     upload=upload,
                     knowledge_base_code=knowledge_base.code,
+                    folder_path=selected_folder_path,
                     archive_name=original_name,
                     runner=runner,
                 )
@@ -830,12 +975,12 @@ async def upload_files(
             message = f"{message}；部分文件失败，请看页面提示。"
         error_text = " | ".join(errors)
         return RedirectResponse(
-            url=f"/files?{urlencode({'knowledge_base_code': knowledge_base.code, 'message': message, 'error': error_text})}",
+            url=f"/files?{urlencode({'knowledge_base_code': knowledge_base.code, 'folder_path': selected_folder_path, 'message': message, 'error': error_text})}",
             status_code=303,
         )
 
     return RedirectResponse(
-        url=f"/?{urlencode({'error': ' | '.join(errors) or '没有可处理的文件'})}",
+        url=f"/?{urlencode({'knowledge_base_code': knowledge_base.code, 'folder_path': selected_folder_path, 'error': ' | '.join(errors) or '没有可处理的文件'})}",
         status_code=303,
     )
 
@@ -888,6 +1033,7 @@ def file_list(
     q: str = "",
     sort_by: str = "",
     sort_dir: str = "",
+    page_size: int = FILES_PAGE_SIZE,
     page: int = 1,
     _: None = Depends(require_login),
 ) -> HTMLResponse:
@@ -904,6 +1050,7 @@ def file_list(
     selected_search_query = str(q or "").strip()
     selected_sort_by = normalize_file_sort_by(sort_by)
     selected_sort_dir = normalize_file_sort_dir(sort_dir)
+    selected_page_size = normalize_files_page_size(page_size)
     folder_records = (
         build_folder_rows_with_counts(knowledge_base_code=selected_knowledge_base_code)
         if selected_knowledge_base_code
@@ -922,6 +1069,7 @@ def file_list(
         search_query=selected_search_query,
         sort_by=selected_sort_by,
         sort_dir=selected_sort_dir,
+        page_size=selected_page_size,
     )
     total_files = db.count_library_files(
         settings,
@@ -933,7 +1081,7 @@ def file_list(
     pagination = build_pagination(
         page=page,
         total_count=total_files,
-        page_size=FILES_PAGE_SIZE,
+        page_size=selected_page_size,
         params=base_params,
     )
 
@@ -946,8 +1094,8 @@ def file_list(
             search_query=selected_search_query or None,
             sort_by=selected_sort_by,
             sort_dir=selected_sort_dir,
-            limit=FILES_PAGE_SIZE,
-            offset=(int(pagination["page"]) - 1) * FILES_PAGE_SIZE,
+            limit=selected_page_size,
+            offset=(int(pagination["page"]) - 1) * selected_page_size,
         )
     )
     failed_file_count = (
@@ -1034,6 +1182,7 @@ def file_list(
         selected_search_query=selected_search_query,
         selected_sort_by=selected_sort_by,
         selected_sort_dir=selected_sort_dir,
+        selected_page_size=selected_page_size,
         folder_rows_by_code=folder_rows_by_code,
     )
     selected_knowledge_tree = next(
@@ -1051,7 +1200,12 @@ def file_list(
         all_files_params["q"] = selected_search_query
     all_files_params["sort_by"] = selected_sort_by
     all_files_params["sort_dir"] = selected_sort_dir
+    all_files_params["page_size"] = str(selected_page_size)
     export_params = dict(base_params)
+    detail_params = dict(base_params)
+    if int(pagination["page"]) > 1:
+        detail_params["page"] = str(pagination["page"])
+    detail_query = urlencode(detail_params)
     return render(
         request,
         "files.html",
@@ -1074,6 +1228,8 @@ def file_list(
             "selected_search_query": selected_search_query,
             "selected_sort_by": selected_sort_by,
             "selected_sort_dir": selected_sort_dir,
+            "selected_page_size": selected_page_size,
+            "page_size_options": FILES_PAGE_SIZE_OPTIONS,
             "folder_tree": knowledge_tree,
             "knowledge_tree": knowledge_tree,
             "selected_knowledge_tree": selected_knowledge_tree,
@@ -1085,6 +1241,7 @@ def file_list(
             "bulk_delete_success_confirm_text": BULK_DELETE_SUCCESS_CONFIRM_TEXT,
             "all_files_href": f"/files?{urlencode(all_files_params)}" if all_files_params else "/files",
             "export_href": f"/files/export.xlsx?{urlencode(export_params)}",
+            "file_detail_query": detail_query,
         },
     )
 
@@ -1097,6 +1254,7 @@ def export_file_inventory(
     q: str = "",
     sort_by: str = "",
     sort_dir: str = "",
+    page_size: int = FILES_PAGE_SIZE,
     _: None = Depends(require_login),
 ) -> StreamingResponse:
     selected_knowledge_base_code = knowledge_base_code.strip()
@@ -1161,6 +1319,8 @@ def create_folder_route(
     q: str = Form(default=""),
     sort_by: str = Form(default=""),
     sort_dir: str = Form(default=""),
+    page_size: int = Form(default=FILES_PAGE_SIZE),
+    page: int = Form(default=1),
     _: None = Depends(require_login),
 ):
     normalized_knowledge_base_code = knowledge_base_code.strip()
@@ -1172,6 +1332,8 @@ def create_folder_route(
         search_query=q,
         sort_by=sort_by,
         sort_dir=sort_dir,
+        page_size=page_size,
+        page=page,
     )
 
     if not knowledge_base_exists(settings, normalized_knowledge_base_code):
@@ -1214,6 +1376,8 @@ def delete_folder_route(
     q: str = Form(default=""),
     sort_by: str = Form(default=""),
     sort_dir: str = Form(default=""),
+    page_size: int = Form(default=FILES_PAGE_SIZE),
+    page: int = Form(default=1),
     _: None = Depends(require_login),
 ):
     normalized_knowledge_base_code = knowledge_base_code.strip()
@@ -1227,6 +1391,8 @@ def delete_folder_route(
         search_query=q,
         sort_by=sort_by,
         sort_dir=sort_dir,
+        page_size=page_size,
+        page=page,
     )
 
     if not normalized_folder_path:
@@ -1270,6 +1436,8 @@ def rename_folder_route(
     q: str = Form(default=""),
     sort_by: str = Form(default=""),
     sort_dir: str = Form(default=""),
+    page_size: int = Form(default=FILES_PAGE_SIZE),
+    page: int = Form(default=1),
     _: None = Depends(require_login),
 ):
     normalized_knowledge_base_code = knowledge_base_code.strip()
@@ -1281,6 +1449,8 @@ def rename_folder_route(
         search_query=q,
         sort_by=sort_by,
         sort_dir=sort_dir,
+        page_size=page_size,
+        page=page,
     )
 
     if not knowledge_base_exists(settings, normalized_knowledge_base_code):
@@ -1336,6 +1506,8 @@ def move_files_route(
     q: str = Form(default=""),
     sort_by: str = Form(default=""),
     sort_dir: str = Form(default=""),
+    page_size: int = Form(default=FILES_PAGE_SIZE),
+    page: int = Form(default=1),
     _: None = Depends(require_login),
 ):
     normalized_knowledge_base_code = knowledge_base_code.strip()
@@ -1347,6 +1519,8 @@ def move_files_route(
         search_query=q,
         sort_by=sort_by,
         sort_dir=sort_dir,
+        page_size=page_size,
+        page=page,
     )
     if not knowledge_base_exists(settings, normalized_knowledge_base_code):
         return RedirectResponse(
@@ -1427,11 +1601,34 @@ def delete_knowledge_base_route(
 def file_detail(
     doc_id: str,
     request: Request,
+    knowledge_base_code: str = "",
+    folder_path: str = "",
+    process_status: str = "",
+    q: str = "",
+    sort_by: str = "",
+    sort_dir: str = "",
+    page_size: int = FILES_PAGE_SIZE,
+    page: int = 1,
     _: None = Depends(require_login),
 ) -> HTMLResponse:
     file_record = enrich_record(db.get_task(settings, doc_id))
     if file_record is None:
         raise HTTPException(status_code=404, detail="File not found")
+    preserved_file_list_params = build_preserved_file_list_params(
+        task=file_record,
+        knowledge_base_code=knowledge_base_code,
+        folder_path=folder_path,
+        process_status=process_status,
+        search_query=q,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page_size=page_size,
+        page=page,
+    )
+    detail_params = dict(preserved_file_list_params)
+    detail_move_params = {
+        key: value for key, value in detail_params.items() if key != "knowledge_base_code"
+    }
     file_link = build_file_link_payload(doc_id, require_file=False)
     detail_folder_rows = build_folder_rows_with_counts(
         knowledge_base_code=str(file_record.get("knowledge_base_code") or "")
@@ -1448,6 +1645,9 @@ def file_detail(
             "file_link_enabled": settings.file_link_enabled,
             "file_link_error": "" if file_link else build_file_link_error_hint(doc_id),
             "folder_options": build_folder_options(detail_folder_rows),
+            "file_list_return_href": append_query_params("/files", preserved_file_list_params),
+            "detail_hidden_params": detail_params,
+            "detail_move_hidden_params": detail_move_params,
         },
     )
 
@@ -1456,26 +1656,49 @@ def file_detail(
 def retry_fastgpt_sync(
     doc_id: str,
     request: Request,
+    knowledge_base_code: str = Form(default=""),
+    folder_path: str = Form(default=""),
+    process_status: str = Form(default=""),
+    q: str = Form(default=""),
+    sort_by: str = Form(default=""),
+    sort_dir: str = Form(default=""),
+    page_size: int = Form(default=FILES_PAGE_SIZE),
+    page: int = Form(default=1),
     _: None = Depends(require_login),
 ):
     del request
+    task = db.get_task(settings, doc_id)
+    detail_params = build_preserved_file_list_params(
+        task=task,
+        knowledge_base_code=knowledge_base_code,
+        folder_path=folder_path,
+        process_status=process_status,
+        search_query=q,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page_size=page_size,
+        page=page,
+    )
     runner: MineruTaskRunner = app.state.task_runner
     try:
         runner.sync_task_to_fastgpt(doc_id)
     except FastGPTSyncError as exc:
+        detail_params["error"] = str(exc)
         return RedirectResponse(
-            url=f"/files/{doc_id}?{urlencode({'error': str(exc)})}",
+            url=append_query_params(f"/files/{doc_id}", detail_params),
             status_code=303,
         )
     except Exception as exc:
         logger.exception("FastGPT sync retry failed for doc_id=%s", doc_id)
+        detail_params["error"] = f"重试失败：{exc}"
         return RedirectResponse(
-            url=f"/files/{doc_id}?{urlencode({'error': f'重试失败：{exc}'})}",
+            url=append_query_params(f"/files/{doc_id}", detail_params),
             status_code=303,
         )
 
+    detail_params["message"] = "FastGPT/Bridge 同步已重试"
     return RedirectResponse(
-        url=f"/files/{doc_id}?{urlencode({'message': 'FastGPT/Bridge 同步已重试'})}",
+        url=append_query_params(f"/files/{doc_id}", detail_params),
         status_code=303,
     )
 
@@ -1485,6 +1708,14 @@ def delete_document(
     doc_id: str,
     request: Request,
     password: str = Form(...),
+    knowledge_base_code: str = Form(default=""),
+    folder_path: str = Form(default=""),
+    process_status: str = Form(default=""),
+    q: str = Form(default=""),
+    sort_by: str = Form(default=""),
+    sort_dir: str = Form(default=""),
+    page_size: int = Form(default=FILES_PAGE_SIZE),
+    page: int = Form(default=1),
     _: None = Depends(require_login),
 ):
     del request
@@ -1495,23 +1726,31 @@ def delete_document(
             status_code=303,
         )
 
-    redirect_params = {
-        "knowledge_base_code": str(task.get("knowledge_base_code") or "").strip(),
-    }
-    folder_path = normalize_folder_path(task.get("folder_path"))
-    if folder_path:
-        redirect_params["folder_path"] = folder_path
+    redirect_params = build_preserved_file_list_params(
+        task=task,
+        knowledge_base_code=knowledge_base_code,
+        folder_path=folder_path,
+        process_status=process_status,
+        search_query=q,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page_size=page_size,
+        page=page,
+    )
+    detail_params = dict(redirect_params)
 
     if not secrets.compare_digest(password, settings.password):
+        detail_params["error"] = "删除密码不正确"
         return RedirectResponse(
-            url=f"/files/{doc_id}?{urlencode({'error': '删除密码不正确'})}",
+            url=append_query_params(f"/files/{doc_id}", detail_params),
             status_code=303,
         )
 
     process_status = str(task.get("process_status") or "").strip()
     if process_status not in {"success", "failed"}:
+        detail_params["error"] = "当前版本不支持删除排队中或处理中的文档"
         return RedirectResponse(
-            url=f"/files/{doc_id}?{urlencode({'error': '当前版本不支持删除排队中或处理中的文档'})}",
+            url=append_query_params(f"/files/{doc_id}", detail_params),
             status_code=303,
         )
 
@@ -1524,8 +1763,9 @@ def delete_document(
             bridge_service=bridge_service,
         )
     except DocumentDeleteError as exc:
+        detail_params["error"] = str(exc)
         return RedirectResponse(
-            url=f"/files/{doc_id}?{urlencode({'error': str(exc)})}",
+            url=append_query_params(f"/files/{doc_id}", detail_params),
             status_code=303,
         )
     finally:
@@ -1549,6 +1789,8 @@ def delete_failed_documents(
     q: str = Form(default=""),
     sort_by: str = Form(default=""),
     sort_dir: str = Form(default=""),
+    page_size: int = Form(default=FILES_PAGE_SIZE),
+    page: int = Form(default=1),
     _: None = Depends(require_login),
 ):
     del request
@@ -1559,6 +1801,8 @@ def delete_failed_documents(
         search_query=q,
         sort_by=sort_by,
         sort_dir=sort_dir,
+        page_size=page_size,
+        page=page,
     )
 
     if not secrets.compare_digest(password, settings.password):
@@ -1626,6 +1870,8 @@ def delete_selected_documents(
     q: str = Form(default=""),
     sort_by: str = Form(default=""),
     sort_dir: str = Form(default=""),
+    page_size: int = Form(default=FILES_PAGE_SIZE),
+    page: int = Form(default=1),
     _: None = Depends(require_login),
 ):
     del request
@@ -1636,6 +1882,8 @@ def delete_selected_documents(
         search_query=q,
         sort_by=sort_by,
         sort_dir=sort_dir,
+        page_size=page_size,
+        page=page,
     )
 
     if not secrets.compare_digest(password, settings.password):
@@ -2138,9 +2386,11 @@ async def archive_uploaded_zip(
     *,
     upload: UploadFile,
     knowledge_base_code: str,
+    folder_path: str = "",
     archive_name: str,
     runner: MineruTaskRunner,
 ) -> tuple[list[str], list[str]]:
+    normalized_folder_path = normalize_folder_path(folder_path)
     work_dir = settings.uploads_dir / "_zip_imports" / generate_doc_id()
     archive_path = work_dir / archive_name
     queued_doc_ids: list[str] = []
@@ -2171,7 +2421,10 @@ async def archive_uploaded_zip(
                                 source_handle=source_handle,
                                 knowledge_base_code=knowledge_base_code,
                                 original_name=original_name,
-                                relative_source_path=normalized_path,
+                                relative_source_path=prefix_relative_source_path(
+                                    normalized_folder_path,
+                                    normalized_path,
+                                ),
                                 source_archive_name=archive_name,
                                 runner=runner,
                             )

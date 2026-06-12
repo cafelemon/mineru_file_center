@@ -172,6 +172,54 @@ class DocumentDeleteRouteTests(unittest.TestCase):
         self.assertEqual(FakeFastGPTService.deleted_ids, ["col-1"])
         self.assertEqual(FakeBridgeService.calls, [("doc-1", "col-1")])
 
+    def test_delete_document_preserves_list_context(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+
+        settings = build_settings(tmp_path)
+        settings.ensure_directories()
+        db.init_db(settings)
+        create_task_record(settings, doc_id="doc-context")
+
+        with patch.object(main_module, "settings", settings), patch.object(
+            main_module, "FastGPTSyncService", FakeFastGPTService
+        ), patch.object(main_module, "BridgeRegistrySyncService", FakeBridgeService):
+            with TestClient(app) as client:
+                client.post(
+                    "/login",
+                    data={"username": settings.username, "password": settings.password},
+                    follow_redirects=False,
+                )
+                response = client.post(
+                    "/files/doc-context/delete",
+                    data={
+                        "password": settings.password,
+                        "knowledge_base_code": "general",
+                        "folder_path": "制度库/人事",
+                        "process_status": "success",
+                        "q": "员工",
+                        "sort_by": "name",
+                        "sort_dir": "asc",
+                        "page_size": "100",
+                        "page": "3",
+                    },
+                    follow_redirects=False,
+                )
+
+        self.assertEqual(response.status_code, 303)
+        location = response.headers["location"]
+        self.assertIn("knowledge_base_code=general", location)
+        self.assertIn("folder_path=%E5%88%B6%E5%BA%A6%E5%BA%93%2F%E4%BA%BA%E4%BA%8B", location)
+        self.assertIn("process_status=success", location)
+        self.assertIn("q=%E5%91%98%E5%B7%A5", location)
+        self.assertIn("sort_by=name", location)
+        self.assertIn("sort_dir=asc", location)
+        self.assertIn("page_size=100", location)
+        self.assertIn("page=3", location)
+
     def test_delete_document_rejects_wrong_password(self):
         tmp_path = Path(self.id().replace(".", "_"))
         if tmp_path.exists():

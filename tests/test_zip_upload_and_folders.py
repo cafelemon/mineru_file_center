@@ -50,6 +50,183 @@ def build_settings(tmp_path: Path):
 
 
 class ZipUploadAndFolderTests(unittest.TestCase):
+    def test_dashboard_renders_upload_folder_tree(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+
+        settings = build_settings(tmp_path)
+        settings.ensure_directories()
+        db.init_db(settings)
+        db.create_knowledge_folder(
+            settings,
+            knowledge_base_code="general",
+            folder_path="制度库/人事/入职",
+        )
+        db.create_knowledge_folder(
+            settings,
+            knowledge_base_code="general",
+            folder_path="制度库/质量",
+        )
+
+        with patch.object(main_module, "settings", settings):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/login",
+                    data={"username": settings.username, "password": settings.password},
+                    follow_redirects=False,
+                )
+                self.assertEqual(response.status_code, 303)
+
+                response = client.get("/", params={"knowledge_base_code": "general"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("目标目录", response.text)
+        self.assertIn("data-upload-folder-panel", response.text)
+        self.assertIn("制度库/人事/入职", response.text)
+        self.assertIn("知识库根目录", response.text)
+
+    def test_upload_single_file_uses_selected_folder(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+
+        settings = build_settings(tmp_path)
+        settings.ensure_directories()
+        db.init_db(settings)
+        db.create_knowledge_folder(
+            settings,
+            knowledge_base_code="general",
+            folder_path="制度库/人事/入职",
+        )
+        runner = StubRunner()
+
+        with patch.object(main_module, "settings", settings):
+            with TestClient(app) as client:
+                app.state.task_runner = runner
+                client.post(
+                    "/login",
+                    data={"username": settings.username, "password": settings.password},
+                    follow_redirects=False,
+                )
+                response = client.post(
+                    "/upload",
+                    data={
+                        "knowledge_base_code": "general",
+                        "folder_path": "制度库/人事/入职",
+                    },
+                    files=[
+                        (
+                            "files",
+                            ("员工手册.pdf", b"%PDF-1.4\n%test", "application/pdf"),
+                        )
+                    ],
+                    follow_redirects=False,
+                )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("folder_path=%E5%88%B6%E5%BA%A6%E5%BA%93%2F%E4%BA%BA%E4%BA%8B%2F%E5%85%A5%E8%81%8C", response.headers["location"])
+        self.assertEqual(len(runner.doc_ids), 1)
+        record = db.get_task(settings, runner.doc_ids[0])
+        self.assertIsNotNone(record)
+        self.assertEqual(record["folder_path"], "制度库/人事/入职")
+        self.assertEqual(record["relative_source_path"], "制度库/人事/入职/员工手册.pdf")
+
+    def test_upload_zip_prefixes_selected_target_folder(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+
+        settings = build_settings(tmp_path)
+        settings.ensure_directories()
+        db.init_db(settings)
+        db.create_knowledge_folder(
+            settings,
+            knowledge_base_code="general",
+            folder_path="制度库/人事/入职",
+        )
+        runner = StubRunner()
+
+        archive_buffer = io.BytesIO()
+        with zipfile.ZipFile(archive_buffer, "w") as archive:
+            archive.writestr("员工手册.pdf", b"%PDF-1.4\n%test")
+        archive_buffer.seek(0)
+
+        with patch.object(main_module, "settings", settings):
+            with TestClient(app) as client:
+                app.state.task_runner = runner
+                client.post(
+                    "/login",
+                    data={"username": settings.username, "password": settings.password},
+                    follow_redirects=False,
+                )
+                response = client.post(
+                    "/upload",
+                    data={
+                        "knowledge_base_code": "general",
+                        "folder_path": "制度库/人事/入职",
+                    },
+                    files=[
+                        (
+                            "files",
+                            ("batch.zip", archive_buffer.getvalue(), "application/zip"),
+                        )
+                    ],
+                    follow_redirects=False,
+                )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(len(runner.doc_ids), 1)
+        record = db.get_task(settings, runner.doc_ids[0])
+        self.assertIsNotNone(record)
+        self.assertEqual(record["folder_path"], "制度库/人事/入职")
+        self.assertEqual(record["relative_source_path"], "制度库/人事/入职/员工手册.pdf")
+
+    def test_upload_rejects_missing_target_folder(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+
+        settings = build_settings(tmp_path)
+        settings.ensure_directories()
+        db.init_db(settings)
+        runner = StubRunner()
+
+        with patch.object(main_module, "settings", settings):
+            with TestClient(app) as client:
+                app.state.task_runner = runner
+                client.post(
+                    "/login",
+                    data={"username": settings.username, "password": settings.password},
+                    follow_redirects=False,
+                )
+                response = client.post(
+                    "/upload",
+                    data={
+                        "knowledge_base_code": "general",
+                        "folder_path": "不存在/目录",
+                    },
+                    files=[
+                        (
+                            "files",
+                            ("员工手册.pdf", b"%PDF-1.4\n%test", "application/pdf"),
+                        )
+                    ],
+                    follow_redirects=False,
+                )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("error=", response.headers["location"])
+        self.assertEqual(runner.doc_ids, [])
+
     def test_list_library_files_filters_by_folder_prefix(self):
         tmp_path = Path(self.id().replace(".", "_"))
         if tmp_path.exists():
@@ -257,10 +434,82 @@ class ZipUploadAndFolderTests(unittest.TestCase):
         self.assertIn('name="sort_by"', response.text)
         self.assertIn('name="sort_dir"', response.text)
         self.assertIn("/files/export.xlsx", response.text)
+        self.assertIn('name="page_size"', response.text)
+        self.assertIn('>20 条<', response.text)
+        self.assertIn('>50 条<', response.text)
+        self.assertIn('>100 条<', response.text)
+        self.assertIn('>200 条<', response.text)
+        self.assertIn('>500 条<', response.text)
         self.assertIn("目标目录", response.text)
         self.assertIn("新建目录", response.text)
         self.assertIn("制度库/人事", response.text)
         self.assertIn("员工手册.pdf", response.text)
+
+    def test_files_page_keeps_page_size_in_detail_links(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+
+        settings = build_settings(tmp_path)
+        settings.ensure_directories()
+        db.init_db(settings)
+        for index in range(21):
+            doc_id = f"doc-{index:02d}"
+            db.insert_task(
+                settings,
+                {
+                    "doc_id": doc_id,
+                    "knowledge_base_code": "general",
+                    "folder_path": "制度库/人事",
+                    "relative_source_path": f"制度库/人事/{doc_id}.pdf",
+                    "source_archive_name": "",
+                    "original_filename": f"{doc_id}.pdf",
+                    "stored_pdf_path": str(settings.pdf_store_dir / f"{doc_id}.pdf"),
+                    "stored_pdf_filename": f"{doc_id}.pdf",
+                    "final_md_path": str(settings.output_dir / f"{doc_id}.md"),
+                    "final_md_filename": f"{doc_id}.md",
+                    "upload_time": f"2026-01-01T00:00:{index:02d}+00:00",
+                    "started_at": None,
+                    "completed_at": None,
+                    "processed_time": None,
+                    "process_status": "success",
+                    "error_message": "",
+                    "mineru_task_dir": str(settings.tasks_dir / doc_id),
+                    "log_path": str(settings.tasks_dir / doc_id / "task.log"),
+                    "file_sha256": "",
+                    "notes": "",
+                    "file_size_bytes": 128,
+                    "mineru_backend": settings.mineru_backend,
+                    "mineru_method": settings.mineru_method,
+                    "fastgpt_sync_status": "synced",
+                    "fastgpt_sync_error": "",
+                },
+            )
+
+        with patch.object(main_module, "settings", settings), patch.object(
+            main_module.db, "mark_incomplete_tasks_as_interrupted", lambda _settings: None
+        ):
+            with TestClient(app) as client:
+                client.post(
+                    "/login",
+                    data={"username": settings.username, "password": settings.password},
+                    follow_redirects=False,
+                )
+                response = client.get(
+                    "/files",
+                    params={
+                        "knowledge_base_code": "general",
+                        "page_size": 20,
+                        "page": 2,
+                    },
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("/files/doc-00?knowledge_base_code=general", response.text)
+        self.assertIn("page_size=20", response.text)
+        self.assertIn("page=2", response.text)
 
     def test_file_inventory_sheets_group_by_knowledge_base_or_root_folder(self):
         records = [

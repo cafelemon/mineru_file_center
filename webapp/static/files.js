@@ -11,6 +11,10 @@
     const deleteSelectedForm = document.querySelector("[data-delete-selected-form]");
     const deleteSelectedDocIds = document.querySelector("[data-delete-selected-doc-ids]");
     const deleteSelectedCount = document.querySelector("[data-delete-selected-count]");
+    const uploadKnowledgeSelect = document.querySelector("[data-upload-knowledge-select]");
+    const uploadFolderInput = document.querySelector("[data-upload-folder-input]");
+    const uploadFolderPanels = Array.from(document.querySelectorAll("[data-upload-folder-panel]"));
+    const pageSizeSelect = document.querySelector("[data-page-size-select]");
 
     function escapeSelectorValue(value) {
         if (window.CSS && typeof window.CSS.escape === "function") {
@@ -225,6 +229,9 @@
                 if (input) {
                     input.value = folderPath;
                 }
+                if (uploadFolderInput && picker.hasAttribute("data-upload-folder-panel") && !picker.hidden) {
+                    uploadFolderInput.value = folderPath;
+                }
                 if (label) {
                     label.textContent = folderLabel || "知识库根目录";
                 }
@@ -234,6 +241,34 @@
             });
         });
     });
+
+    if (uploadKnowledgeSelect && uploadFolderInput) {
+        function syncUploadFolderPanel() {
+            const selectedCode = uploadKnowledgeSelect.value || "";
+            uploadFolderPanels.forEach((panel) => {
+                const isActive = panel.getAttribute("data-knowledge-base-code") === selectedCode;
+                panel.hidden = !isActive;
+                const panelInput = panel.querySelector("[data-folder-picker-input]");
+                if (!isActive) {
+                    return;
+                }
+                uploadFolderInput.value = panelInput ? panelInput.value || "" : "";
+            });
+        }
+
+        uploadKnowledgeSelect.addEventListener("change", syncUploadFolderPanel);
+        syncUploadFolderPanel();
+    }
+
+    if (pageSizeSelect && pageSizeSelect.form) {
+        pageSizeSelect.addEventListener("change", function () {
+            const pageInput = pageSizeSelect.form.querySelector('input[name="page"]');
+            if (pageInput) {
+                pageInput.remove();
+            }
+            pageSizeSelect.form.submit();
+        });
+    }
 
     document.addEventListener("click", function (event) {
         folderPickers.forEach((picker) => {
